@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PackProof — สถานีแพคออเดอร์ (Healthcare)</title>
+<style>
+  :root{
+    --ink:#12150f; --paper:#f4f2ea; --line:#dcd6c4; --muted:#6f6a59;
+    --teal:#1f6f6b; --teal-soft:#e0eceb;
+    --rec:#c0492f; --rec-soft:#f6e3de;
+    --amber:#c98a1a; --amber-soft:#f7ecd5; --ok:#2f7d52;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{font-family:"DM Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    background:var(--paper);color:var(--ink);-webkit-font-smoothing:antialiased;
+    display:flex;flex-direction:column;min-height:100vh}
+  header{display:flex;align-items:center;justify-content:space-between;padding:12px 18px;
+    border-bottom:2px solid var(--ink);position:sticky;top:0;background:var(--paper);z-index:20}
+  .brand{display:flex;align-items:baseline;gap:9px}
+  .brand b{font-size:20px;letter-spacing:-.5px}
+  .brand small{color:var(--muted);font-size:10px;letter-spacing:2px;text-transform:uppercase}
+  .who{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
+  .who input{font-family:inherit;font-size:13px;font-weight:700;color:var(--ink);
+    border:1px solid var(--line);border-radius:2px;padding:6px 9px;width:130px;background:#fff}
+  main{flex:1;display:grid;grid-template-columns:1.5fr 1fr}
+  @media(max-width:900px){main{grid-template-columns:1fr}}
+  .stage{position:relative;background:#0b0d0a;display:flex;align-items:center;justify-content:center;
+    min-height:56vh;overflow:hidden;border-right:2px solid var(--ink)}
+  @media(max-width:900px){.stage{border-right:none;border-bottom:2px solid var(--ink)}}
+  video{width:100%;height:100%;object-fit:cover}
+  .pill{position:absolute;top:14px;left:14px;display:flex;align-items:center;gap:8px;
+    background:rgba(11,13,10,.72);color:#fff;padding:7px 13px;border-radius:2px;font-size:11px;
+    letter-spacing:1.5px;text-transform:uppercase;backdrop-filter:blur(4px)}
+  .dot{width:9px;height:9px;border-radius:50%;background:#777}
+  .dot.live{background:var(--rec);animation:pulse 1.1s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+  .timer{position:absolute;top:14px;right:14px;background:rgba(11,13,10,.72);color:#fff;
+    padding:7px 13px;border-radius:2px;font-size:15px;font-weight:700;font-variant-numeric:tabular-nums;
+    letter-spacing:1px;backdrop-filter:blur(4px)}
+  .stamp{position:absolute;bottom:14px;left:14px;right:14px;display:flex;justify-content:space-between;align-items:flex-end;pointer-events:none}
+  .stamp .ord{font-size:26px;font-weight:700;color:#fff;text-shadow:0 2px 8px rgba(0,0,0,.6);line-height:1}
+  .stamp .meta{text-align:right;color:#fff;text-shadow:0 1px 6px rgba(0,0,0,.6);font-size:12px;line-height:1.5;font-variant-numeric:tabular-nums}
+  .idle-hint{position:absolute;color:#8a8f80;font-size:13px;text-align:center;padding:0 30px;line-height:1.7}
+  .showdoc{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
+    background:rgba(31,111,107,.82);color:#fff;flex-direction:column;gap:10px;backdrop-filter:blur(2px)}
+  .showdoc.on{display:flex}
+  .showdoc b{font-size:26px;letter-spacing:1px}
+  .showdoc .cd{font-size:54px;font-weight:700;font-variant-numeric:tabular-nums}
+  .showdoc small{font-size:13px;opacity:.85}
+  .console{display:flex;flex-direction:column}
+  .scan-row{padding:16px 18px 14px;border-bottom:1px solid var(--line)}
+  .scan-row label{display:block;font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin-bottom:7px}
+  .scan-input{width:100%;font-family:inherit;font-size:22px;font-weight:700;letter-spacing:1px;
+    padding:13px 15px;border:2px solid var(--ink);border-radius:2px;background:#fff;outline:none}
+  .scan-input:focus{box-shadow:4px 4px 0 var(--teal)}
+  .scan-input::placeholder{color:#c3bda9;font-weight:400}
+  .hintline{font-size:11.5px;color:var(--muted);margin-top:7px;line-height:1.5}
+  .hintline b{color:var(--ink)}
+  .hintline code{background:var(--teal-soft);color:var(--teal);padding:1px 6px;border-radius:2px;font-weight:700}
+  .strip{display:grid;grid-template-columns:repeat(3,1fr);border-bottom:1px solid var(--line)}
+  .strip div{padding:13px;text-align:center;border-right:1px solid var(--line)}
+  .strip div:last-child{border-right:none}
+  .strip .n{font-size:24px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1}
+  .strip .l{font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin-top:5px}
+  .strip .n.run{color:var(--rec)} .strip .n.warn{color:var(--amber)}
+  .logwrap{flex:1;overflow-y:auto}
+  .logwrap h3{font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);padding:11px 18px 5px}
+  .row{display:flex;align-items:center;gap:11px;padding:10px 18px;border-bottom:1px solid var(--line);font-size:13px}
+  .row .ico{width:8px;height:8px;border-radius:50%;flex:none}
+  .row.ok .ico{background:var(--ok)} .row.dup .ico{background:var(--rec)}
+  .row.up .ico{background:var(--amber);animation:pulse 1s infinite}
+  .row.run .ico{background:var(--rec);animation:pulse 1.1s infinite}
+  .row .o{font-weight:700;flex:1;letter-spacing:.5px}
+  .row .meta2{color:var(--muted);font-variant-numeric:tabular-nums;font-size:11.5px;text-align:right}
+  .row .badge{font-size:10px;letter-spacing:1px;text-transform:uppercase;font-weight:700}
+  .row.dup .badge{color:var(--rec)} .row.up .badge{color:var(--amber)}
+  .empty{padding:36px 18px;text-align:center;color:#b4ae9c;font-size:13px;line-height:1.7}
+  footer{display:flex;gap:9px;padding:12px 18px;border-top:2px solid var(--ink);background:var(--paper);align-items:center;flex-wrap:wrap}
+  button{font-family:inherit;cursor:pointer;border:2px solid var(--ink);border-radius:2px;font-size:12.5px;
+    letter-spacing:.4px;font-weight:700;padding:10px 14px;background:#fff;transition:.12s}
+  button:hover{box-shadow:3px 3px 0 var(--ink)} button:active{box-shadow:none;transform:translate(2px,2px)}
+  button.primary{background:var(--ink);color:var(--paper)}
+  button.done{background:var(--teal);color:#fff;border-color:var(--teal)}
+  button.done:hover{box-shadow:3px 3px 0 var(--ink)}
+  button:disabled{opacity:.4;cursor:not-allowed;box-shadow:none;transform:none}
+  select{font-family:inherit;font-size:12px;padding:9px 10px;border:2px solid var(--line);border-radius:2px;background:#fff;margin-left:auto}
+  .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%) translateY(140%);
+    background:var(--ink);color:var(--paper);padding:13px 20px;border-radius:2px;font-size:14px;z-index:50;
+    transition:.3s;max-width:90vw;text-align:center;line-height:1.5}
+  .toast.show{transform:translateX(-50%) translateY(0)}
+  .toast.warn{background:var(--rec)} .toast.amber{background:var(--amber)}
+  .cfg{font-size:11px;color:#b4ae9c;padding:3px 18px 9px}
+  .cfg a{color:var(--muted)}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><b>PackProof</b><small>Healthcare · คลิปยาว</small></div>
+  <div class="who">ผู้แพค <input id="packer" placeholder="ชื่อ/รหัส" autocomplete="off"></div>
+</header>
+<main>
+  <section class="stage">
+    <video id="cam" autoplay muted playsinline></video>
+    <div class="idle-hint" id="idleHint">เลือกกล้อง → ใส่ชื่อผู้แพค → ยิงบาร์โค้ดใบออเดอร์เพื่อเริ่ม</div>
+    <div class="pill"><span class="dot" id="recDot"></span><span id="recState">พร้อม</span></div>
+    <div class="timer" id="timer" style="display:none">00:00</div>
+    <div class="stamp" id="stamp" style="display:none">
+      <div class="ord" id="stampOrd">—</div>
+      <div class="meta"><div id="stampPacker">—</div><div id="stampTime">—</div></div>
+    </div>
+    <div class="showdoc" id="showdoc">
+      <b>📄 จ่อใบออเดอร์หน้ากล้อง</b>
+      <div class="cd" id="showCd">3</div>
+      <small>ถ่ายใบให้เห็นชัดเป็นหลักฐานต้นคลิป</small>
+    </div>
+  </section>
+  <section class="console">
+    <div class="scan-row">
+      <label for="scan">ยิงบาร์โค้ด</label>
+      <input id="scan" class="scan-input" placeholder="ยิงใบออเดอร์…" autocomplete="off" autofocus>
+      <div class="hintline">
+        ยิง<b>ใบออเดอร์</b> = เริ่มอัด · ยิง <code>DONE</code> (แปะที่โต๊ะ) = ปิดคลิป<br>
+        ยิงออเดอร์เดิมซ้ำตอนกำลังอัด = ปิดคลิปเช่นกัน
+      </div>
+    </div>
+    <div class="strip">
+      <div><div class="n" id="mDone">0</div><div class="l">เสร็จวันนี้</div></div>
+      <div><div class="n run" id="mRun">0</div><div class="l">กำลังอัด</div></div>
+      <div><div class="n warn" id="mQueue">0</div><div class="l">รออัปโหลด</div></div>
+    </div>
+    <div class="logwrap">
+      <h3>รายการ</h3>
+      <div id="log"><div class="empty">ยังไม่มีออเดอร์<br>ยิงใบออเดอร์แรกเพื่อเริ่ม</div></div>
+    </div>
+  </section>
+</main>
+<footer>
+  <button class="primary" id="btnCam">เปิดกล้อง</button>
+  <button class="done" id="btnDone" disabled>ปิดคลิป (DONE)</button>
+  <button id="btnSync" title="ส่งคิวที่ค้าง">ส่งคิวค้าง</button>
+  <select id="camSel" title="เลือกกล้อง"></select>
+  <select id="quality" title="ความละเอียด">
+    <option value="1280x720">720p</option>
+    <option value="854x480">480p (เบาเครื่อง)</option>
+    <option value="1920x1080">1080p</option>
+  </select>
+</footer>
+<div class="cfg">
+  ระบบ: <a id="cfgUrl" href="#">กำลังโหลด…</a> · วิดีโอเก็บเข้า Google Drive อัตโนมัติ (ไม่ต้องเชื่อม Google)
+</div>
+<div class="toast" id="toast"></div>
+<script>
+const CFG_URL='packproof_backend_url';
+const STOP_CODE='DONE';
+const REMIND_AFTER_MIN=35;
+const CHUNK=6*1024*1024;   // 6MB/chunk (ทวีคูณ 256KB ตามที่ Drive resumable ต้องการ + เลี่ยงลิมิต Apps Script 50MB/ครั้ง)
+/* ===== ค่าตั้งต้น PackProof (ตั้งไว้แล้ว — เปิดแล้วใช้ได้เลย ไม่ต้องกรอก ไม่ต้องเชื่อม Google) ===== */
+const DEFAULTS={
+  [CFG_URL]:'https://script.google.com/macros/s/AKfycbxMcffat1dtUkVGamV4OrvP0_Xi0CwTjCGPEl33nJ0LewnhZ3W6cqcMHcL-YSG7wGISbw/exec'
+};
+Object.keys(DEFAULTS).forEach(k=>{if(!localStorage.getItem(k))localStorage.setItem(k,DEFAULTS[k]);});
+const $=id=>document.getElementById(id);
+const els={cam:$('cam'),scan:$('scan'),packer:$('packer'),recDot:$('recDot'),recState:$('recState'),
+  timer:$('timer'),stamp:$('stamp'),stampOrd:$('stampOrd'),stampPacker:$('stampPacker'),stampTime:$('stampTime'),
+  idleHint:$('idleHint'),showdoc:$('showdoc'),showCd:$('showCd'),log:$('log'),
+  mDone:$('mDone'),mRun:$('mRun'),mQueue:$('mQueue'),btnCam:$('btnCam'),btnDone:$('btnDone'),btnSync:$('btnSync'),
+  camSel:$('camSel'),quality:$('quality'),toast:$('toast'),cfgUrl:$('cfgUrl')};
+let stream=null,rec=null,chunks=[],current=null,rafId=null,canvas=null,ctx=null;
+let seen=new Set(),queue=[],stats={done:0},remindTimer=null;
+function toast(msg,kind){els.toast.textContent=msg;els.toast.className='toast show'+(kind?' '+kind:'');
+  clearTimeout(toast._t);toast._t=setTimeout(()=>els.toast.className='toast',2800);}
+function nowStr(){const d=new Date(),p=n=>String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;}
+function hms(sec){const p=n=>String(n).padStart(2,'0');return `${p(Math.floor(sec/60))}:${p(sec%60)}`;}
+async function listCams(){try{const devs=await navigator.mediaDevices.enumerateDevices();
+  const cams=devs.filter(d=>d.kind==='videoinput');
+  els.camSel.innerHTML=cams.map((c,i)=>`<option value="${c.deviceId}">${c.label||('กล้อง '+(i+1))}</option>`).join('');}catch(_){}}
+els.btnCam.onclick=async()=>{if(stream){stopCam();return;}await startCam();};
+async function startCam(){try{
+  const [w,h]=els.quality.value.split('x').map(Number);const devId=els.camSel.value;
+  stream=await navigator.mediaDevices.getUserMedia({video:{width:w,height:h,deviceId:devId?{exact:devId}:undefined},audio:false});
+  els.cam.srcObject=stream;els.btnCam.textContent='ปิดกล้อง';els.idleHint.style.display='none';
+  setRec('idle','พร้อม');await listCams();els.scan.focus();toast('เปิดกล้องแล้ว — ยิงใบออเดอร์เพื่อเริ่ม');
+}catch(e){toast('เปิดกล้องไม่ได้: '+e.message,'warn');}}
+function stopCam(){if(current)finishClip('ปิดกล้อง');
+  stream&&stream.getTracks().forEach(t=>t.stop());stream=null;els.cam.srcObject=null;
+  els.btnCam.textContent='เปิดกล้อง';els.idleHint.style.display='block';setRec('off','ปิด');}
+els.camSel.onchange=()=>{if(stream&&!current){stopCam();startCam();}};
+function setRec(mode,txt){els.recDot.className='dot'+(mode==='rec'?' live':'');els.recState.textContent=txt;}
+function buildCanvasStream(){
+  const [w,h]=els.quality.value.split('x').map(Number);
+  canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;ctx=canvas.getContext('2d');
+  const v=els.cam;
+  (function draw(){
+    if(v.videoWidth)ctx.drawImage(v,0,0,w,h);
+    const g=ctx.createLinearGradient(0,h-150,0,h);
+    g.addColorStop(0,'rgba(0,0,0,0)');g.addColorStop(1,'rgba(0,0,0,.55)');
+    ctx.fillStyle=g;ctx.fillRect(0,h-150,w,150);
+    if(current){const s=Math.max(1,w/1280);
+      ctx.fillStyle='#fff';ctx.textAlign='left';
+      ctx.font=`700 ${Math.round(40*s)}px DM Mono, monospace`;
+      ctx.fillText(current.order,Math.round(26*s),h-Math.round(44*s));
+      ctx.textAlign='right';
+      ctx.font=`600 ${Math.round(22*s)}px DM Mono, monospace`;
+      ctx.fillText(nowStr(),w-Math.round(26*s),h-Math.round(70*s));
+      ctx.fillText('โดย '+(current.packer||'-'),w-Math.round(26*s),h-Math.round(40*s));
+      ctx.textAlign='left';}
+    rafId=requestAnimationFrame(draw);
+  })();
+  return canvas.captureStream(25);
+}
+function startTimerUI(){els.timer.style.display='block';const t0=current.startTs;
+  current._tick=setInterval(()=>{const sec=Math.floor((Date.now()-t0)/1000);
+    els.timer.textContent=hms(sec);els.stampTime.textContent=nowStr();},1000);
+  remindTimer=setTimeout(()=>{if(current)toast('⏰ ออเดอร์ '+current.order+' อัดเกิน '+REMIND_AFTER_MIN+' นาทีแล้ว — ยิง DONE เมื่อเสร็จ','amber');},REMIND_AFTER_MIN*60000);}
+function stopTimerUI(){els.timer.style.display='none';if(current&&current._tick)clearInterval(current._tick);clearTimeout(remindTimer);}
+els.scan.addEventListener('keydown',e=>{if(e.key!=='Enter')return;
+  const code=els.scan.value.trim();els.scan.value='';if(!code)return;
+  if(!stream){toast('เปิดกล้องก่อนนะครับ','warn');return;}handleScan(code);});
+function handleScan(code){const up=code.toUpperCase();
+  if(up===STOP_CODE){if(current)finishClip('ยิง DONE');else toast('ยังไม่มีออเดอร์ที่กำลังอัด');return;}
+  if(current&&code===current.order){finishClip('ยิงซ้ำ');return;}
+  if(current){toast('⚠ กำลังอัด '+current.order+' อยู่ — ยิง DONE ปิดก่อนเริ่มใหม่','warn');return;}
+  if(seen.has(code)){addRow({order:code,dup:true});toast('⚠ ออเดอร์ '+code+' เคยแพคแล้ววันนี้','warn');return;}
+  startClip(code);}
+function startClip(order){
+  const packer=els.packer.value.trim()||'-';
+  current={order,packer,startTs:Date.now(),rowEl:null};seen.add(order);
+  els.stamp.style.display='flex';els.stampOrd.textContent=order;
+  els.stampPacker.textContent='โดย '+packer;els.stampTime.textContent=nowStr();
+  const cs=buildCanvasStream();chunks=[];
+  const mime=MediaRecorder.isTypeSupported('video/webm;codecs=vp9')?'video/webm;codecs=vp9':'video/webm';
+  rec=new MediaRecorder(cs,{mimeType:mime,videoBitsPerSecond:2500000});
+  rec.ondataavailable=ev=>{if(ev.data.size)chunks.push(ev.data);};
+  rec.start(120000);
+  setRec('rec','กำลังอัด · '+order);startTimerUI();els.btnDone.disabled=false;
+  current.rowEl=addRow({order,packer,running:true});updateCounts();runShowDoc();}
+function runShowDoc(){els.showdoc.classList.add('on');let n=3;els.showCd.textContent=n;
+  const iv=setInterval(()=>{n--;els.showCd.textContent=n;if(n<=0){clearInterval(iv);els.showdoc.classList.remove('on');}},1000);}
+function finishClip(reason){
+  if(!current)return;const c=current;current=null;stopTimerUI();
+  const dur=Math.floor((Date.now()-c.startTs)/1000);
+  const finalize=()=>{cancelAnimationFrame(rafId);
+    const blob=new Blob(chunks,{type:'video/webm'});
+    if(c.rowEl){c.rowEl.className='row up';const b=c.rowEl.querySelector('.badge');b.style.display='';b.textContent='อัปโหลด…';}
+    enqueueUpload({order:c.order,packer:c.packer,durationSec:dur,ts:nowStr(),
+      filename:`${c.packer}_${c.order}_${nowStr().slice(0,10)}.webm`,blob,rowEl:c.rowEl});
+    stats.done++;updateCounts();};
+  rec.onstop=finalize;try{rec.stop();}catch(_){finalize();}
+  els.stamp.style.display='none';els.btnDone.disabled=true;
+  setRec('idle','พร้อม — ยิงใบออเดอร์ถัดไป');toast('ปิดคลิป '+c.order+' ('+reason+', '+hms(dur)+')');}
+els.btnDone.onclick=()=>finishClip('กดปุ่ม');
+function addRow({order,packer,dup,running}){
+  if(els.log.querySelector('.empty'))els.log.innerHTML='';
+  const div=document.createElement('div');
+  div.className='row '+(dup?'dup':running?'run':'ok');
+  const t=new Date().toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'});
+  div.innerHTML=`<span class="ico"></span><span class="o">${order}</span>
+    <span class="badge" style="${dup||running?'':'display:none'}">${dup?'ซ้ำ':'อัดอยู่'}</span>
+    <span class="meta2">${packer?packer+' · ':''}${t}</span>`;
+  els.log.prepend(div);return div;}
+function updateCounts(){els.mDone.textContent=stats.done;els.mRun.textContent=current?1:0;els.mQueue.textContent=queue.length;}
+function enqueueUpload(item){queue.push(item);updateCounts();flushQueue();}
+let flushing=false;
+async function flushQueue(){
+  if(flushing)return;flushing=true;
+  try{
+    while(queue.length){const it=queue[0];
+      const url=localStorage.getItem(CFG_URL);
+      if(!url){badge(it,'รอตั้งระบบ');toast('ยังไม่ได้ตั้งค่าระบบ','amber');break;}
+      try{
+        const fileUrl=await backendUpload(it,url);
+        if(it.rowEl){it.rowEl.className='row ok';it.rowEl.querySelector('.badge').style.display='none';}
+        queue.shift();updateCounts();
+      }catch(err){badge(it,'ลองใหม่');
+        toast('อัปโหลดไม่สำเร็จ — เก็บไว้ในคิว (กด "ส่งคิวค้าง")','warn');break;}
+    }
+  }finally{flushing=false;}
+}
+function badge(it,txt){if(it.rowEl){it.rowEl.className='row up';const b=it.rowEl.querySelector('.badge');b.style.display='';b.textContent=txt;}}
+/* ---------- อัปวิดีโอผ่าน backend (Apps Script เซฟเข้า Drive ด้วยสิทธิ์เจ้าของ) แบ่งเป็น chunk ---------- */
+async function backendUpload(it,url){
+  const prog=p=>{if(it.rowEl){const b=it.rowEl.querySelector('.badge');b.style.display='';b.textContent='อัปโหลด '+p+'%';}};
+  prog(0);
+  const init=await apiPost(url,{action:'initUpload',filename:it.filename});
+  if(!init.ok||!init.session)throw new Error('init '+(init.error||''));
+  const total=it.blob.size;let start=0,fileUrl='';
+  while(start<total){
+    const end=Math.min(start+CHUNK,total);
+    const last=end>=total;
+    const data=await blobChunkB64(it.blob,start,end);
+    const r=await apiPost(url,{action:'uploadChunk',session:init.session,start,end,total,data,
+      meta:last?{order:it.order,packer:it.packer,durationSec:it.durationSec,ts:it.ts,filename:it.filename}:null});
+    if(!r.ok)throw new Error('chunk '+(r.error||''));
+    start=end;prog(Math.round(start/total*100));
+    if(r.done){fileUrl=r.videoUrl;break;}
+  }
+  return fileUrl;
+}
+function apiPost(url,obj){
+  return fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(obj)})
+    .then(r=>r.text()).then(t=>{try{return JSON.parse(t);}catch(e){throw new Error('ตอบกลับผิดรูปแบบ: '+t.slice(0,80));}});
+}
+function blobChunkB64(blob,start,end){
+  return new Promise((res,rej)=>{const r=new FileReader();
+    r.onload=()=>{const s=r.result;res(s.slice(s.indexOf(',')+1));};   // ตัด "data:...;base64," ออก
+    r.onerror=()=>rej(new Error('อ่านไฟล์ไม่ได้'));
+    r.readAsDataURL(blob.slice(start,end));});
+}
+els.btnSync.onclick=()=>{if(!queue.length){toast('ไม่มีคิวค้าง');return;}toast('กำลังส่งคิว…');flushQueue();};
+function refreshCfg(){const u=localStorage.getItem(CFG_URL);
+  els.cfgUrl.textContent=u?'พร้อมใช้งาน ✓':'ยังไม่ตั้งค่า';}
+els.cfgUrl.onclick=e=>{e.preventDefault();
+  const v=prompt('ลิงก์ระบบ (Apps Script /exec) — ปกติตั้งไว้แล้ว ไม่ต้องแก้:',localStorage.getItem(CFG_URL)||'');
+  if(v!==null){localStorage.setItem(CFG_URL,v.trim());refreshCfg();toast('บันทึกแล้ว');}};
+refreshCfg();
+document.addEventListener('click',e=>{if(!['INPUT','BUTTON','A','SELECT','OPTION'].includes(e.target.tagName))els.scan.focus();});
+navigator.mediaDevices&&navigator.mediaDevices.enumerateDevices&&listCams();
+</script>
+</body>
+</html>
