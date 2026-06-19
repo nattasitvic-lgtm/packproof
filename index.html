@@ -84,6 +84,11 @@
   button.primary{background:var(--ink);color:var(--paper)}
   button.done{background:var(--teal);color:#fff;border-color:var(--teal)}
   button.done:hover{box-shadow:3px 3px 0 var(--ink)}
+  .endgrp{display:flex;gap:6px;flex-wrap:wrap}
+  button.hold{background:var(--amber-soft);color:#7a5410;border-color:var(--amber);font-size:11.5px;padding:10px 11px}
+  button.cancel{background:var(--rec-soft);color:var(--rec);border-color:var(--rec);font-size:11.5px;padding:10px 11px}
+  button.hold:hover,button.cancel:hover{box-shadow:3px 3px 0 var(--ink)}
+  .row.hold .ico{background:var(--amber)} .row.hold .badge{color:var(--amber)}
   button:disabled{opacity:.4;cursor:not-allowed;box-shadow:none;transform:none}
   select{font-family:inherit;font-size:12px;padding:9px 10px;border:2px solid var(--line);border-radius:2px;background:#fff;margin-left:auto}
   .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%) translateY(140%);
@@ -138,7 +143,13 @@
 </main>
 <footer>
   <button class="primary" id="btnCam">เปิดกล้อง</button>
-  <button class="done" id="btnDone" disabled>ปิดคลิป (DONE)</button>
+  <span class="endgrp">
+    <button class="done" id="btnDone" disabled>✓ เสร็จ</button>
+    <button class="hold" id="btnStock" disabled>ของไม่ครบ</button>
+    <button class="hold" id="btnDefect" disabled>ชำรุด</button>
+    <button class="hold" id="btnWrong" disabled>จัดผิด</button>
+    <button class="cancel" id="btnCancel" disabled>ยกเลิก</button>
+  </span>
   <button id="btnSync" title="ส่งคิวที่ค้าง">ส่งคิวค้าง</button>
   <select id="camSel" title="เลือกกล้อง"></select>
   <select id="quality" title="ความละเอียด">
@@ -153,7 +164,14 @@
 <div class="toast" id="toast"></div>
 <script>
 const CFG_URL='packproof_backend_url';
-const STOP_CODE='DONE';
+/* บาร์โค้ดสถานะปิดคลิป (ยิงโค้ดเหล่านี้ = ปิดคลิปพร้อมระบุสถานะ/เหตุผล) */
+const END_CODES={
+  'DONE':        {status:'DONE',   reason:'',                  label:'เสร็จ'},
+  'HOLD-STOCK':  {status:'HOLD',   reason:'ของไม่ครบ/สต็อกหมด', label:'ของไม่ครบ'},
+  'HOLD-DEFECT': {status:'HOLD',   reason:'ของชำรุด/มีปัญหา',   label:'ชำรุด'},
+  'HOLD-WRONG':  {status:'HOLD',   reason:'จัดผิด/รายการผิด',   label:'จัดผิด'},
+  'CANCEL':      {status:'CANCEL', reason:'ลูกค้าขอแก้/ยกเลิก',  label:'ยกเลิก'}
+};
 const REMIND_AFTER_MIN=35;
 const CHUNK=6*1024*1024;   // 6MB/chunk (ทวีคูณ 256KB ตามที่ Drive resumable ต้องการ + เลี่ยงลิมิต Apps Script 50MB/ครั้ง)
 /* ===== ค่าตั้งต้น PackProof (ตั้งไว้แล้ว — เปิดแล้วใช้ได้เลย ไม่ต้องกรอก ไม่ต้องเชื่อม Google) ===== */
@@ -166,7 +184,9 @@ const els={cam:$('cam'),scan:$('scan'),packer:$('packer'),recDot:$('recDot'),rec
   timer:$('timer'),stamp:$('stamp'),stampOrd:$('stampOrd'),stampPacker:$('stampPacker'),stampTime:$('stampTime'),
   idleHint:$('idleHint'),showdoc:$('showdoc'),showCd:$('showCd'),log:$('log'),
   mDone:$('mDone'),mRun:$('mRun'),mQueue:$('mQueue'),btnCam:$('btnCam'),btnDone:$('btnDone'),btnSync:$('btnSync'),
+  btnStock:$('btnStock'),btnDefect:$('btnDefect'),btnWrong:$('btnWrong'),btnCancel:$('btnCancel'),
   camSel:$('camSel'),quality:$('quality'),toast:$('toast'),cfgUrl:$('cfgUrl')};
+function setEndBtns(on){[els.btnDone,els.btnStock,els.btnDefect,els.btnWrong,els.btnCancel].forEach(b=>b.disabled=!on);}
 let stream=null,rec=null,chunks=[],current=null,rafId=null,canvas=null,ctx=null;
 let seen=new Set(),queue=[],stats={done:0},remindTimer=null;
 function toast(msg,kind){els.toast.textContent=msg;els.toast.className='toast show'+(kind?' '+kind:'');
@@ -220,10 +240,10 @@ els.scan.addEventListener('keydown',e=>{if(e.key!=='Enter')return;
   const code=els.scan.value.trim();els.scan.value='';if(!code)return;
   if(!stream){toast('เปิดกล้องก่อนนะครับ','warn');return;}handleScan(code);});
 function handleScan(code){const up=code.toUpperCase();
-  if(up===STOP_CODE){if(current)finishClip('ยิง DONE');else toast('ยังไม่มีออเดอร์ที่กำลังอัด');return;}
-  if(current&&code===current.order){finishClip('ยิงซ้ำ');return;}
-  if(current){toast('⚠ กำลังอัด '+current.order+' อยู่ — ยิง DONE ปิดก่อนเริ่มใหม่','warn');return;}
-  if(seen.has(code)){addRow({order:code,dup:true});toast('⚠ ออเดอร์ '+code+' เคยแพคแล้ววันนี้','warn');return;}
+  if(END_CODES[up]){if(current)finishClip(END_CODES[up]);else toast('ยังไม่มีออเดอร์ที่กำลังอัด');return;}
+  if(current&&code===current.order){finishClip(END_CODES['DONE']);return;}
+  if(current){toast('⚠ กำลังอัด '+current.order+' อยู่ — ปิดคลิปก่อนเริ่มใหม่','warn');return;}
+  if(seen.has(code))toast('↻ เบอร์ '+code+' เคยยิงวันนี้ — เริ่มแพครอบใหม่','amber');
   startClip(code);}
 function startClip(order){
   const packer=els.packer.value.trim()||'-';
@@ -235,23 +255,27 @@ function startClip(order){
   rec=new MediaRecorder(cs,{mimeType:mime,videoBitsPerSecond:2500000});
   rec.ondataavailable=ev=>{if(ev.data.size)chunks.push(ev.data);};
   rec.start(120000);
-  setRec('rec','กำลังอัด · '+order);startTimerUI();els.btnDone.disabled=false;
+  setRec('rec','กำลังอัด · '+order);startTimerUI();setEndBtns(true);
   current.rowEl=addRow({order,packer,running:true});updateCounts();runShowDoc();}
 function runShowDoc(){els.showdoc.classList.add('on');let n=3;els.showCd.textContent=n;
   const iv=setInterval(()=>{n--;els.showCd.textContent=n;if(n<=0){clearInterval(iv);els.showdoc.classList.remove('on');}},1000);}
-function finishClip(reason){
+function finishClip(end){
   if(!current)return;const c=current;current=null;stopTimerUI();
   const dur=Math.floor((Date.now()-c.startTs)/1000);
   const finalize=()=>{cancelAnimationFrame(rafId);
     const blob=new Blob(chunks,{type:'video/webm'});
     if(c.rowEl){c.rowEl.className='row up';const b=c.rowEl.querySelector('.badge');b.style.display='';b.textContent='อัปโหลด…';}
-    enqueueUpload({order:c.order,packer:c.packer,durationSec:dur,ts:nowStr(),
-      filename:`${c.packer}_${c.order}_${nowStr().slice(0,10)}.webm`,blob,rowEl:c.rowEl});
-    stats.done++;updateCounts();};
+    enqueueUpload({order:c.order,packer:c.packer,durationSec:dur,ts:nowStr(),status:end.status,reason:end.reason,
+      filename:`${c.packer}_${c.order}_${end.status}_${nowStr().slice(0,10)}.webm`,blob,rowEl:c.rowEl});
+    if(end.status==='DONE')stats.done++;updateCounts();};
   rec.onstop=finalize;try{rec.stop();}catch(_){finalize();}
-  els.stamp.style.display='none';els.btnDone.disabled=true;
-  setRec('idle','พร้อม — ยิงใบออเดอร์ถัดไป');toast('ปิดคลิป '+c.order+' ('+reason+', '+hms(dur)+')');}
-els.btnDone.onclick=()=>finishClip('กดปุ่ม');
+  els.stamp.style.display='none';setEndBtns(false);
+  setRec('idle','พร้อม — ยิงใบออเดอร์ถัดไป');toast('ปิดคลิป '+c.order+' ('+end.label+', '+hms(dur)+')',end.status==='DONE'?'':'amber');}
+els.btnDone.onclick=()=>finishClip(END_CODES['DONE']);
+els.btnStock.onclick=()=>finishClip(END_CODES['HOLD-STOCK']);
+els.btnDefect.onclick=()=>finishClip(END_CODES['HOLD-DEFECT']);
+els.btnWrong.onclick=()=>finishClip(END_CODES['HOLD-WRONG']);
+els.btnCancel.onclick=()=>finishClip(END_CODES['CANCEL']);
 function addRow({order,packer,dup,running}){
   if(els.log.querySelector('.empty'))els.log.innerHTML='';
   const div=document.createElement('div');
@@ -272,7 +296,10 @@ async function flushQueue(){
       if(!url){badge(it,'รอตั้งระบบ');toast('ยังไม่ได้ตั้งค่าระบบ','amber');break;}
       try{
         const fileUrl=await backendUpload(it,url);
-        if(it.rowEl){it.rowEl.className='row ok';it.rowEl.querySelector('.badge').style.display='none';}
+        if(it.rowEl){const st=it.status||'DONE';
+          it.rowEl.className='row '+(st==='DONE'?'ok':st==='CANCEL'?'dup':'hold');
+          const b=it.rowEl.querySelector('.badge');
+          if(st==='DONE'){b.style.display='none';}else{b.style.display='';b.textContent=it.reason||st;}}
         queue.shift();updateCounts();
       }catch(err){badge(it,'ลองใหม่');
         toast('อัปโหลดไม่สำเร็จ — เก็บไว้ในคิว (กด "ส่งคิวค้าง")','warn');break;}
@@ -292,7 +319,7 @@ async function backendUpload(it,url){
     const last=end>=total;
     const data=await blobChunkB64(it.blob,start,end);
     const r=await apiPost(url,{action:'uploadChunk',session:init.session,start,end,total,data,
-      meta:last?{order:it.order,packer:it.packer,durationSec:it.durationSec,ts:it.ts,filename:it.filename}:null});
+      meta:last?{order:it.order,packer:it.packer,durationSec:it.durationSec,ts:it.ts,filename:it.filename,status:it.status,reason:it.reason}:null});
     if(!r.ok)throw new Error('chunk '+(r.error||''));
     start=end;prog(Math.round(start/total*100));
     if(r.done){fileUrl=r.videoUrl;break;}
