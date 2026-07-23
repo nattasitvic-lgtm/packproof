@@ -91,6 +91,11 @@
   .row.hold .ico{background:var(--amber)} .row.hold .badge{color:var(--amber)}
   button:disabled{opacity:.4;cursor:not-allowed;box-shadow:none;transform:none}
   select{font-family:inherit;font-size:12px;padding:9px 10px;border:2px solid var(--line);border-radius:2px;background:#fff;margin-left:auto}
+  .alertbar{position:fixed;top:0;left:0;right:0;background:var(--rec);color:#fff;padding:12px 18px;
+    font-size:15px;font-weight:700;text-align:center;z-index:60;display:none;letter-spacing:.2px;line-height:1.4;
+    box-shadow:0 3px 0 rgba(0,0,0,.25)}
+  .alertbar.on{display:block;animation:flash 1.1s infinite}
+  @keyframes flash{0%,100%{background:var(--rec)}50%{background:#e0653f}}
   .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%) translateY(140%);
     background:var(--ink);color:var(--paper);padding:13px 20px;border-radius:2px;font-size:14px;z-index:50;
     transition:.3s;max-width:90vw;text-align:center;line-height:1.5}
@@ -101,6 +106,7 @@
 </style>
 </head>
 <body>
+<div class="alertbar" id="alertbar"></div>
 <header>
   <div class="brand"><b>PackProof</b><small>Healthcare · คลิปยาว</small></div>
   <div class="who">ผู้แพค <input id="packer" placeholder="ชื่อ/รหัส" autocomplete="off"></div>
@@ -174,6 +180,9 @@ const END_CODES={
 };
 const REMIND_AFTER_MIN=35;
 const CHUNK=6*1024*1024;   // 6MB/chunk (ทวีคูณ 256KB ตามที่ Drive resumable ต้องการ + เลี่ยงลิมิต Apps Script 50MB/ครั้ง)
+const STUCK_MIN=2;         // เตือนแดง+เสียง เมื่อคลิปค้างคิวเกินกี่นาที
+const RETRY_MS=30000;      // ลองส่งคิวค้างซ้ำอัตโนมัติทุกกี่ ms (กันเน็ตกระตุก/หลุด)
+const THAI_RE=/[฀-๿]/;  // ตรวจจับตัวอักษรไทย = แป้นพิมพ์ผิดโหมด (บาร์โค้ดจะเพี้ยน)
 /* ===== ค่าตั้งต้น PackProof (ตั้งไว้แล้ว — เปิดแล้วใช้ได้เลย ไม่ต้องกรอก ไม่ต้องเชื่อม Google) ===== */
 const DEFAULTS={
   [CFG_URL]:'https://script.google.com/macros/s/AKfycbxMcffat1dtUkVGamV4OrvP0_Xi0CwTjCGPEl33nJ0LewnhZ3W6cqcMHcL-YSG7wGISbw/exec'
@@ -191,6 +200,28 @@ let stream=null,rec=null,chunks=[],current=null,rafId=null,canvas=null,ctx=null;
 let seen=new Set(),queue=[],stats={done:0},remindTimer=null;
 function toast(msg,kind){els.toast.textContent=msg;els.toast.className='toast show'+(kind?' '+kind:'');
   clearTimeout(toast._t);toast._t=setTimeout(()=>els.toast.className='toast',2800);}
+/* ---------- IndexedDB: เก็บคลิปในคิว "ถาวร" (ปิดแท็บ/รีเฟรช/ไฟดับ ก็ไม่หาย) ---------- */
+const IDB_NAME='packproof',IDB_STORE='queue';let _db=null;
+function idb(){return new Promise((res,rej)=>{if(_db)return res(_db);
+  const q=indexedDB.open(IDB_NAME,1);
+  q.onupgradeneeded=()=>{const db=q.result;if(!db.objectStoreNames.contains(IDB_STORE))db.createObjectStore(IDB_STORE,{keyPath:'id'});};
+  q.onsuccess=()=>{_db=q.result;res(_db);};q.onerror=()=>rej(q.error);});}
+function idbPut(rec){return idb().then(db=>new Promise((res,rej)=>{
+  const tx=db.transaction(IDB_STORE,'readwrite');tx.objectStore(IDB_STORE).put(rec);
+  tx.oncomplete=()=>res();tx.onerror=()=>rej(tx.error);}));}
+function idbDel(id){return idb().then(db=>new Promise((res,rej)=>{
+  const tx=db.transaction(IDB_STORE,'readwrite');tx.objectStore(IDB_STORE).delete(id);
+  tx.oncomplete=()=>res();tx.onerror=()=>rej(tx.error);}));}
+function idbAll(){return idb().then(db=>new Promise((res,rej)=>{
+  const tx=db.transaction(IDB_STORE,'readonly');const rq=tx.objectStore(IDB_STORE).getAll();
+  rq.onsuccess=()=>res(rq.result||[]);rq.onerror=()=>rej(rq.error);}));}
+/* ---------- เสียงเตือน (WebAudio — ไม่ต้องมีไฟล์เสียง) ---------- */
+let _ac=null,_lastBeep=0;
+function beep(){try{if(!_ac)_ac=new (window.AudioContext||window.webkitAudioContext)();
+  if(_ac.state==='suspended')_ac.resume();
+  const o=_ac.createOscillator(),g=_ac.createGain();o.connect(g);g.connect(_ac.destination);
+  o.type='square';o.frequency.value=880;g.gain.value=0.12;
+  o.start();o.stop(_ac.currentTime+0.28);}catch(_){}}
 function nowStr(){const d=new Date(),p=n=>String(n).padStart(2,'0');
   return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;}
 function hms(sec){const p=n=>String(n).padStart(2,'0');return `${p(Math.floor(sec/60))}:${p(sec%60)}`;}
@@ -238,6 +269,8 @@ function startTimerUI(){els.timer.style.display='block';const t0=current.startTs
 function stopTimerUI(){els.timer.style.display='none';if(current&&current._tick)clearInterval(current._tick);clearTimeout(remindTimer);}
 els.scan.addEventListener('keydown',e=>{if(e.key!=='Enter')return;
   const code=els.scan.value.trim();els.scan.value='';if(!code)return;
+  if(THAI_RE.test(code)){beep();
+    toast('⚠ แป้นพิมพ์เป็นภาษาไทย! กดปุ่ม ~ (ตัวหนอน มุมซ้ายบน) หรือ Alt+Shift สลับเป็น EN แล้วยิงใหม่','warn');return;}
   if(!stream){toast('เปิดกล้องก่อนนะครับ','warn');return;}handleScan(code);});
 function handleScan(code){const up=code.toUpperCase();
   if(END_CODES[up]){if(current)finishClip(END_CODES[up]);else toast('ยังไม่มีออเดอร์ที่กำลังอัด');return;}
@@ -286,7 +319,13 @@ function addRow({order,packer,dup,running}){
     <span class="meta2">${packer?packer+' · ':''}${t}</span>`;
   els.log.prepend(div);return div;}
 function updateCounts(){els.mDone.textContent=stats.done;els.mRun.textContent=current?1:0;els.mQueue.textContent=queue.length;}
-function enqueueUpload(item){queue.push(item);updateCounts();flushQueue();}
+async function enqueueUpload(item){
+  item.id=item.id||('q'+Date.now()+'_'+Math.floor(Math.random()*1e6));
+  if(item.enqueuedTs==null)item.enqueuedTs=Date.now();
+  try{await idbPut({id:item.id,order:item.order,packer:item.packer,durationSec:item.durationSec,
+    ts:item.ts,status:item.status,reason:item.reason,filename:item.filename,blob:item.blob,enqueuedTs:item.enqueuedTs});}
+  catch(e){/* เซฟ IDB ไม่ได้ก็ยังทำงานต่อในหน่วยความจำ */}
+  queue.push(item);updateCounts();flushQueue();}
 let flushing=false;
 async function flushQueue(){
   if(flushing)return;flushing=true;
@@ -300,9 +339,10 @@ async function flushQueue(){
           it.rowEl.className='row '+(st==='DONE'?'ok':st==='CANCEL'?'dup':'hold');
           const b=it.rowEl.querySelector('.badge');
           if(st==='DONE'){b.style.display='none';}else{b.style.display='';b.textContent=it.reason||st;}}
-        queue.shift();updateCounts();
+        try{await idbDel(it.id);}catch(_){}
+        queue.shift();updateCounts();checkStuck();
       }catch(err){badge(it,'ลองใหม่');
-        toast('อัปโหลดไม่สำเร็จ — เก็บไว้ในคิว (กด "ส่งคิวค้าง")','warn');break;}
+        toast('อัปโหลดไม่สำเร็จ — เก็บไว้ในคิว จะลองส่งซ้ำอัตโนมัติ','warn');break;}
     }
   }finally{flushing=false;}
 }
@@ -343,8 +383,36 @@ els.cfgUrl.onclick=e=>{e.preventDefault();
   const v=prompt('ลิงก์ระบบ (Apps Script /exec) — ปกติตั้งไว้แล้ว ไม่ต้องแก้:',localStorage.getItem(CFG_URL)||'');
   if(v!==null){localStorage.setItem(CFG_URL,v.trim());refreshCfg();toast('บันทึกแล้ว');}};
 refreshCfg();
+/* ---------- กู้คิวค้างจาก IndexedDB ตอนเปิดหน้า ---------- */
+async function resumeQueue(){
+  let items=[];try{items=await idbAll();}catch(_){return;}
+  if(!items.length)return;
+  items.sort((a,b)=>(a.enqueuedTs||0)-(b.enqueuedTs||0));
+  for(const it of items){
+    const row=addRow({order:it.order,packer:it.packer});
+    row.className='row up';const b=row.querySelector('.badge');b.style.display='';b.textContent='รอส่ง (กู้คืน)';
+    it.rowEl=row;queue.push(it);}
+  updateCounts();
+  toast('กู้ '+items.length+' คลิปที่ค้างไว้เมื่อครั้งก่อน — กำลังส่งต่อให้','amber');
+  flushQueue();checkStuck();
+}
+/* ---------- เฝ้าดูคลิปค้าง: ค้างเกิน STUCK_MIN นาที = เตือนแดง+เสียง ---------- */
+function checkStuck(){
+  const bar=$('alertbar'),now=Date.now();
+  const stuck=queue.filter(it=>now-(it.enqueuedTs||now)>STUCK_MIN*60000);
+  if(stuck.length){
+    bar.textContent='⚠ มี '+stuck.length+' คลิปค้างอัปโหลดเกิน '+STUCK_MIN+' นาที — เช็คเน็ต/เสียบสาย LAN และห้ามปิดหน้านี้ จนกว่า "รออัปโหลด" = 0';
+    bar.classList.add('on');document.body.style.paddingTop='48px';
+    if(now-_lastBeep>20000){_lastBeep=now;beep();}
+  }else{bar.classList.remove('on');document.body.style.paddingTop='';}
+}
+setInterval(()=>{if(queue.length)flushQueue();checkStuck();},RETRY_MS);
+setInterval(checkStuck,15000);
+window.addEventListener('beforeunload',e=>{if(queue.length){e.preventDefault();e.returnValue='ยังมีคลิปค้างอัปโหลด '+queue.length+' รายการ — ปิดตอนนี้ต้องเปิดหน้านี้อีกครั้งเพื่อส่งต่อ';return e.returnValue;}});
 document.addEventListener('click',e=>{if(!['INPUT','BUTTON','A','SELECT','OPTION'].includes(e.target.tagName))els.scan.focus();});
 navigator.mediaDevices&&navigator.mediaDevices.enumerateDevices&&listCams();
+resumeQueue();
+console.log('PackProof v5 — persistent queue (IndexedDB) + auto-retry + stuck alert + Thai-keyboard guard');
 </script>
 </body>
 </html>
