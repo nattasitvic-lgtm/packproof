@@ -298,8 +298,13 @@ function finishClip(end){
   const finalize=()=>{cancelAnimationFrame(rafId);
     const blob=new Blob(chunks,{type:'video/webm'});
     if(c.rowEl){c.rowEl.className='row up';const b=c.rowEl.querySelector('.badge');b.style.display='';b.textContent='อัปโหลด…';}
+    /* ชื่อไฟล์ = เลขใบสั่งซื้อ_เวลาเริ่มแพค (HH.mm) + สถานะต่อท้ายเฉพาะที่ไม่ใช่ DONE ; date = วันที่เริ่มแพค (ใช้เลือกโฟลเดอร์รายวันฝั่ง backend) */
+    const sd=new Date(c.startTs),p2=n=>String(n).padStart(2,'0');
+    const packDate=`${sd.getFullYear()}-${p2(sd.getMonth()+1)}-${p2(sd.getDate())}`;
+    const startHM=`${p2(sd.getHours())}.${p2(sd.getMinutes())}`;
     enqueueUpload({order:c.order,packer:c.packer,durationSec:dur,ts:nowStr(),status:end.status,reason:end.reason,
-      filename:`${c.packer}_${c.order}_${end.status}_${nowStr().slice(0,10)}.webm`,blob,rowEl:c.rowEl});
+      date:packDate,
+      filename:`${c.order}_${startHM}${end.status==='DONE'?'':'_'+end.status}.webm`,blob,rowEl:c.rowEl});
     if(end.status==='DONE')stats.done++;updateCounts();};
   rec.onstop=finalize;try{rec.stop();}catch(_){finalize();}
   els.stamp.style.display='none';setEndBtns(false);
@@ -323,7 +328,7 @@ async function enqueueUpload(item){
   item.id=item.id||('q'+Date.now()+'_'+Math.floor(Math.random()*1e6));
   if(item.enqueuedTs==null)item.enqueuedTs=Date.now();
   try{await idbPut({id:item.id,order:item.order,packer:item.packer,durationSec:item.durationSec,
-    ts:item.ts,status:item.status,reason:item.reason,filename:item.filename,blob:item.blob,enqueuedTs:item.enqueuedTs});}
+    ts:item.ts,status:item.status,reason:item.reason,filename:item.filename,date:item.date,blob:item.blob,enqueuedTs:item.enqueuedTs});}
   catch(e){/* เซฟ IDB ไม่ได้ก็ยังทำงานต่อในหน่วยความจำ */}
   queue.push(item);updateCounts();flushQueue();}
 let flushing=false;
@@ -351,7 +356,7 @@ function badge(it,txt){if(it.rowEl){it.rowEl.className='row up';const b=it.rowEl
 async function backendUpload(it,url){
   const prog=p=>{if(it.rowEl){const b=it.rowEl.querySelector('.badge');b.style.display='';b.textContent='อัปโหลด '+p+'%';}};
   prog(0);
-  const init=await apiPost(url,{action:'initUpload',filename:it.filename});
+  const init=await apiPost(url,{action:'initUpload',filename:it.filename,date:it.date||null});
   if(!init.ok||!init.session)throw new Error('init '+(init.error||''));
   const total=it.blob.size;let start=0,fileUrl='';
   while(start<total){
@@ -412,7 +417,7 @@ window.addEventListener('beforeunload',e=>{if(queue.length){e.preventDefault();e
 document.addEventListener('click',e=>{if(!['INPUT','BUTTON','A','SELECT','OPTION'].includes(e.target.tagName))els.scan.focus();});
 navigator.mediaDevices&&navigator.mediaDevices.enumerateDevices&&listCams();
 resumeQueue();
-console.log('PackProof v5 — persistent queue (IndexedDB) + auto-retry + stuck alert + Thai-keyboard guard');
+console.log('PackProof v6 — daily folder + filename ORDER_HH.mm (persistent queue/auto-retry/stuck alert/Thai guard)');
 </script>
 </body>
 </html>
