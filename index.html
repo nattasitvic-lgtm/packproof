@@ -324,11 +324,14 @@ function addRow({order,packer,dup,running}){
     <span class="meta2">${packer?packer+' · ':''}${t}</span>`;
   els.log.prepend(div);return div;}
 function updateCounts(){els.mDone.textContent=stats.done;els.mRun.textContent=current?1:0;els.mQueue.textContent=queue.length;}
+/* v7: เซฟสถานะคลิปลง IDB รวมทั้ง session อัปโหลด + จำนวนไบต์ที่ส่งสำเร็จ (ไว้อัปต่อ ไม่เริ่ม 0 ใหม่) */
+function persistItem(it){return idbPut({id:it.id,order:it.order,packer:it.packer,durationSec:it.durationSec,
+  ts:it.ts,status:it.status,reason:it.reason,filename:it.filename,date:it.date,blob:it.blob,enqueuedTs:it.enqueuedTs,
+  session:it.session||null,sent:it.sent||0});}
 async function enqueueUpload(item){
   item.id=item.id||('q'+Date.now()+'_'+Math.floor(Math.random()*1e6));
   if(item.enqueuedTs==null)item.enqueuedTs=Date.now();
-  try{await idbPut({id:item.id,order:item.order,packer:item.packer,durationSec:item.durationSec,
-    ts:item.ts,status:item.status,reason:item.reason,filename:item.filename,date:item.date,blob:item.blob,enqueuedTs:item.enqueuedTs});}
+  try{await persistItem(item);}
   catch(e){/* เซฟ IDB ไม่ได้ก็ยังทำงานต่อในหน่วยความจำ */}
   queue.push(item);updateCounts();flushQueue();}
 let flushing=false;
@@ -355,18 +358,33 @@ function badge(it,txt){if(it.rowEl){it.rowEl.className='row up';const b=it.rowEl
 /* ---------- อัปวิดีโอผ่าน backend (Apps Script เซฟเข้า Drive ด้วยสิทธิ์เจ้าของ) แบ่งเป็น chunk ---------- */
 async function backendUpload(it,url){
   const prog=p=>{if(it.rowEl){const b=it.rowEl.querySelector('.badge');b.style.display='';b.textContent='อัปโหลด '+p+'%';}};
-  prog(0);
-  const init=await apiPost(url,{action:'initUpload',filename:it.filename,date:it.date||null});
-  if(!init.ok||!init.session)throw new Error('init '+(init.error||''));
-  const total=it.blob.size;let start=0,fileUrl='';
+  const total=it.blob.size;
+  /* v7: ถ้ามี session ค้างจากรอบก่อน = อัปต่อจากไบต์ที่ส่งสำเร็จแล้ว (ไม่เริ่ม 0 ใหม่) */
+  if(it.sent>=total)it.sent=0;                       // กันข้อมูลเพี้ยน
+  if(!it.session){
+    prog(0);
+    const init=await apiPost(url,{action:'initUpload',filename:it.filename,date:it.date||null});
+    if(!init.ok||!init.session)throw new Error('init '+(init.error||''));
+    it.session=init.session;it.sent=0;
+    try{await persistItem(it);}catch(_){}
+  }
+  let start=it.sent||0,fileUrl='';
+  const resumedFrom=start;                            // >0 = รอบนี้เป็นการอัปต่อ
+  prog(Math.round(start/total*100));
   while(start<total){
     const end=Math.min(start+CHUNK,total);
     const last=end>=total;
     const data=await blobChunkB64(it.blob,start,end);
-    const r=await apiPost(url,{action:'uploadChunk',session:init.session,start,end,total,data,
+    const r=await apiPost(url,{action:'uploadChunk',session:it.session,start,end,total,data,
       meta:last?{order:it.order,packer:it.packer,durationSec:it.durationSec,ts:it.ts,filename:it.filename,status:it.status,reason:it.reason}:null});
-    if(!r.ok)throw new Error('chunk '+(r.error||''));
-    start=end;prog(Math.round(start/total*100));
+    if(!r.ok){
+      /* session เดิมใช้ไม่ได้ (หมดอายุ/ถูกปฏิเสธตั้งแต่ chunk แรกของการอัปต่อ) -> ล้างทิ้ง รอบหน้าเริ่มใหม่ตั้งแต่ต้น */
+      if(resumedFrom>0&&start===resumedFrom){it.session=null;it.sent=0;try{await persistItem(it);}catch(_){}}
+      throw new Error('chunk '+(r.error||''));
+    }
+    start=end;it.sent=end;
+    try{await persistItem(it);}catch(_){}
+    prog(Math.round(start/total*100));
     if(r.done){fileUrl=r.videoUrl;break;}
   }
   return fileUrl;
@@ -417,7 +435,7 @@ window.addEventListener('beforeunload',e=>{if(queue.length){e.preventDefault();e
 document.addEventListener('click',e=>{if(!['INPUT','BUTTON','A','SELECT','OPTION'].includes(e.target.tagName))els.scan.focus();});
 navigator.mediaDevices&&navigator.mediaDevices.enumerateDevices&&listCams();
 resumeQueue();
-console.log('PackProof v6 — daily folder + filename ORDER_HH.mm (persistent queue/auto-retry/stuck alert/Thai guard)');
+console.log('PackProof v7 — resumable upload (อัปต่อจาก chunk ที่ค้าง) + daily folder + filename ORDER_HH.mm');
 </script>
 </body>
 </html>
