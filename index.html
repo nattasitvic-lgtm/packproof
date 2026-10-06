@@ -202,7 +202,7 @@ const els={cam:$('cam'),scan:$('scan'),packer:$('packer'),recDot:$('recDot'),rec
 $('bizTag').textContent=BIZ_NAME+' · คลิปยาว';
 if(BIZ==='mu'){$('bizTag').style.color='#1f6f6b';$('bizTag').style.fontWeight='700';}
 function setEndBtns(on){[els.btnDone,els.btnStock,els.btnDefect,els.btnWrong,els.btnCancel].forEach(b=>b.disabled=!on);}
-let stream=null,rec=null,chunks=[],current=null,rafId=null,canvas=null,ctx=null;
+let stream=null,rec=null,chunks=[],current=null,rafId=null,canvas=null,ctx=null,drawTimer=null;
 let seen=new Set(),queue=[],stats={done:0},remindTimer=null;
 function toast(msg,kind){els.toast.textContent=msg;els.toast.className='toast show'+(kind?' '+kind:'');
   clearTimeout(toast._t);toast._t=setTimeout(()=>els.toast.className='toast',2800);}
@@ -250,7 +250,7 @@ function buildCanvasStream(){
   const [w,h]=els.quality.value.split('x').map(Number);
   canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;ctx=canvas.getContext('2d');
   const v=els.cam;
-  (function draw(){
+  function paint(){
     if(v.videoWidth)ctx.drawImage(v,0,0,w,h);
     const g=ctx.createLinearGradient(0,h-150,0,h);
     g.addColorStop(0,'rgba(0,0,0,0)');g.addColorStop(1,'rgba(0,0,0,.55)');
@@ -264,8 +264,12 @@ function buildCanvasStream(){
       ctx.fillText(nowStr(),w-Math.round(26*s),h-Math.round(70*s));
       ctx.fillText('โดย '+(current.packer||'-'),w-Math.round(26*s),h-Math.round(40*s));
       ctx.textAlign='left';}
-    rafId=requestAnimationFrame(draw);
-  })();
+  }
+  (function loop(){paint();rafId=requestAnimationFrame(loop);})();
+  /* v9: กันเคสแท็บ/หน้าต่างถูกซ่อน — requestAnimationFrame จะหยุดวาด ทำให้คลิปว่างเปล่า (0 ไบต์)
+     ตัวจับเวลาสำรองนี้วาดต่อให้ ได้ภาพช้าแต่ยังมีหลักฐาน ไม่สูญทั้งคลิป */
+  clearInterval(drawTimer);
+  drawTimer=setInterval(()=>{if(document.hidden)paint();},200);
   return canvas.captureStream(25);
 }
 function startTimerUI(){els.timer.style.display='block';const t0=current.startTs;
@@ -301,8 +305,17 @@ function runShowDoc(){els.showdoc.classList.add('on');let n=3;els.showCd.textCon
 function finishClip(end){
   if(!current)return;const c=current;current=null;stopTimerUI();
   const dur=Math.floor((Date.now()-c.startTs)/1000);
-  const finalize=()=>{cancelAnimationFrame(rafId);
+  const finalize=()=>{cancelAnimationFrame(rafId);clearInterval(drawTimer);drawTimer=null;
     const blob=new Blob(chunks,{type:'video/webm'});
+    /* v9: ยามกันคลิปเสีย — ถ้าไฟล์ว่าง (0 ไบต์) แปลว่าภาพไม่ถูกบันทึกเลย ห้ามส่งขึ้น Drive ให้เข้าใจผิดว่ามีหลักฐาน */
+    if(!blob.size){
+      if(c.rowEl){c.rowEl.className='row dup';const b=c.rowEl.querySelector('.badge');b.style.display='';b.textContent='คลิปเสีย';}
+      const bar=$('alertbar');
+      bar.textContent='⛔ คลิป '+c.order+' เสีย (ไม่มีภาพ) — ห้ามย่อ/สลับหน้าต่างตอนอัด ต้องแพคใหม่และอัดใหม่';
+      bar.classList.add('on');document.body.style.paddingTop='48px';beep();
+      toast('⛔ คลิปเสีย ไม่มีภาพ — ต้องอัดใหม่','warn');
+      updateCounts();return;
+    }
     if(c.rowEl){c.rowEl.className='row up';const b=c.rowEl.querySelector('.badge');b.style.display='';b.textContent='อัปโหลด…';}
     /* ชื่อไฟล์ = เลขใบสั่งซื้อ_เวลาเริ่มแพค (HH.mm) + สถานะต่อท้ายเฉพาะที่ไม่ใช่ DONE ; date = วันที่เริ่มแพค (ใช้เลือกโฟลเดอร์รายวันฝั่ง backend) */
     const sd=new Date(c.startTs),p2=n=>String(n).padStart(2,'0');
@@ -436,13 +449,23 @@ function checkStuck(){
     if(now-_lastBeep>20000){_lastBeep=now;beep();}
   }else{bar.classList.remove('on');document.body.style.paddingTop='';}
 }
+/* v9: เตือนทันทีถ้าหน้าถูกซ่อนระหว่างอัด (ย่อหน้าต่าง/สลับแท็บ) = ภาพหยุดบันทึก */
+document.addEventListener('visibilitychange',()=>{
+  if(document.hidden&&current){
+    const bar=$('alertbar');
+    bar.textContent='⛔ หน้าถูกซ่อนขณะกำลังอัด '+current.order+' — ภาพจะไม่ถูกบันทึก! กลับมาที่หน้านี้ทันที';
+    bar.classList.add('on');document.body.style.paddingTop='48px';beep();
+  }else if(!document.hidden&&!queue.length){
+    $('alertbar').classList.remove('on');document.body.style.paddingTop='';
+  }
+});
 setInterval(()=>{if(queue.length)flushQueue();checkStuck();},RETRY_MS);
 setInterval(checkStuck,15000);
 window.addEventListener('beforeunload',e=>{if(queue.length){e.preventDefault();e.returnValue='ยังมีคลิปค้างอัปโหลด '+queue.length+' รายการ — ปิดตอนนี้ต้องเปิดหน้านี้อีกครั้งเพื่อส่งต่อ';return e.returnValue;}});
 document.addEventListener('click',e=>{if(!['INPUT','BUTTON','A','SELECT','OPTION'].includes(e.target.tagName))els.scan.focus();});
 navigator.mediaDevices&&navigator.mediaDevices.enumerateDevices&&listCams();
 resumeQueue();
-console.log('PackProof v8 — multi-tenant ?biz=mu (โฟลเดอร์แยกบริษัท) + resumable upload + daily folder, biz='+BIZ);
+console.log('PackProof v9 — กันคลิปเสียตอนหน้าถูกซ่อน (วาดสำรอง+เตือน+ไม่ส่งไฟล์ว่าง) + multi-tenant, biz='+BIZ);
 </script>
 </body>
 </html>
