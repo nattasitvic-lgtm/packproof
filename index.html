@@ -108,7 +108,7 @@
 <body>
 <div class="alertbar" id="alertbar"></div>
 <header>
-  <div class="brand"><b>PackProof</b><small>Healthcare · คลิปยาว</small></div>
+  <div class="brand"><b>PackProof</b><small id="bizTag">Healthcare · คลิปยาว</small></div>
   <div class="who">ผู้แพค <input id="packer" placeholder="ชื่อ/รหัส" autocomplete="off"></div>
 </header>
 <main>
@@ -170,6 +170,10 @@
 <div class="toast" id="toast"></div>
 <script>
 const CFG_URL='packproof_backend_url';
+/* ===== v8: บริษัท (multi-tenant) — ลิงก์เดียวกัน ต่อท้าย ?biz=mu = ฝั่งดนตรี (คลิปแยกโฟลเดอร์ PackProof-Music) ไม่ใส่ = Healthcare ===== */
+const BIZ=((new URLSearchParams(location.search).get('biz'))||'hc').toLowerCase()==='mu'?'mu':'hc';
+const BIZ_NAME=BIZ==='mu'?'Music':'Healthcare';
+document.title=`PackProof — สถานีแพคออเดอร์ (${BIZ_NAME})`;
 /* บาร์โค้ดสถานะปิดคลิป (ยิงโค้ดเหล่านี้ = ปิดคลิปพร้อมระบุสถานะ/เหตุผล) */
 const END_CODES={
   'DONE':        {status:'DONE',   reason:'',                  label:'เสร็จ'},
@@ -195,6 +199,8 @@ const els={cam:$('cam'),scan:$('scan'),packer:$('packer'),recDot:$('recDot'),rec
   mDone:$('mDone'),mRun:$('mRun'),mQueue:$('mQueue'),btnCam:$('btnCam'),btnDone:$('btnDone'),btnSync:$('btnSync'),
   btnStock:$('btnStock'),btnDefect:$('btnDefect'),btnWrong:$('btnWrong'),btnCancel:$('btnCancel'),
   camSel:$('camSel'),quality:$('quality'),toast:$('toast'),cfgUrl:$('cfgUrl')};
+$('bizTag').textContent=BIZ_NAME+' · คลิปยาว';
+if(BIZ==='mu'){$('bizTag').style.color='#1f6f6b';$('bizTag').style.fontWeight='700';}
 function setEndBtns(on){[els.btnDone,els.btnStock,els.btnDefect,els.btnWrong,els.btnCancel].forEach(b=>b.disabled=!on);}
 let stream=null,rec=null,chunks=[],current=null,rafId=null,canvas=null,ctx=null;
 let seen=new Set(),queue=[],stats={done:0},remindTimer=null;
@@ -326,10 +332,11 @@ function addRow({order,packer,dup,running}){
 function updateCounts(){els.mDone.textContent=stats.done;els.mRun.textContent=current?1:0;els.mQueue.textContent=queue.length;}
 /* v7: เซฟสถานะคลิปลง IDB รวมทั้ง session อัปโหลด + จำนวนไบต์ที่ส่งสำเร็จ (ไว้อัปต่อ ไม่เริ่ม 0 ใหม่) */
 function persistItem(it){return idbPut({id:it.id,order:it.order,packer:it.packer,durationSec:it.durationSec,
-  ts:it.ts,status:it.status,reason:it.reason,filename:it.filename,date:it.date,blob:it.blob,enqueuedTs:it.enqueuedTs,
+  ts:it.ts,status:it.status,reason:it.reason,filename:it.filename,date:it.date,biz:it.biz||BIZ,blob:it.blob,enqueuedTs:it.enqueuedTs,
   session:it.session||null,sent:it.sent||0});}
 async function enqueueUpload(item){
   item.id=item.id||('q'+Date.now()+'_'+Math.floor(Math.random()*1e6));
+  item.biz=item.biz||BIZ;
   if(item.enqueuedTs==null)item.enqueuedTs=Date.now();
   try{await persistItem(item);}
   catch(e){/* เซฟ IDB ไม่ได้ก็ยังทำงานต่อในหน่วยความจำ */}
@@ -363,7 +370,7 @@ async function backendUpload(it,url){
   if(it.sent>=total)it.sent=0;                       // กันข้อมูลเพี้ยน
   if(!it.session){
     prog(0);
-    const init=await apiPost(url,{action:'initUpload',filename:it.filename,date:it.date||null});
+    const init=await apiPost(url,{action:'initUpload',filename:it.filename,date:it.date||null,biz:it.biz||BIZ});
     if(!init.ok||!init.session)throw new Error('init '+(init.error||''));
     it.session=init.session;it.sent=0;
     try{await persistItem(it);}catch(_){}
@@ -376,7 +383,7 @@ async function backendUpload(it,url){
     const last=end>=total;
     const data=await blobChunkB64(it.blob,start,end);
     const r=await apiPost(url,{action:'uploadChunk',session:it.session,start,end,total,data,
-      meta:last?{order:it.order,packer:it.packer,durationSec:it.durationSec,ts:it.ts,filename:it.filename,status:it.status,reason:it.reason}:null});
+      meta:last?{order:it.order,packer:it.packer,durationSec:it.durationSec,ts:it.ts,filename:it.filename,status:it.status,reason:it.reason,biz:it.biz||BIZ}:null});
     if(!r.ok){
       /* session เดิมใช้ไม่ได้ (หมดอายุ/ถูกปฏิเสธตั้งแต่ chunk แรกของการอัปต่อ) -> ล้างทิ้ง รอบหน้าเริ่มใหม่ตั้งแต่ต้น */
       if(resumedFrom>0&&start===resumedFrom){it.session=null;it.sent=0;try{await persistItem(it);}catch(_){}}
@@ -435,7 +442,7 @@ window.addEventListener('beforeunload',e=>{if(queue.length){e.preventDefault();e
 document.addEventListener('click',e=>{if(!['INPUT','BUTTON','A','SELECT','OPTION'].includes(e.target.tagName))els.scan.focus();});
 navigator.mediaDevices&&navigator.mediaDevices.enumerateDevices&&listCams();
 resumeQueue();
-console.log('PackProof v7 — resumable upload (อัปต่อจาก chunk ที่ค้าง) + daily folder + filename ORDER_HH.mm');
+console.log('PackProof v8 — multi-tenant ?biz=mu (โฟลเดอร์แยกบริษัท) + resumable upload + daily folder, biz='+BIZ);
 </script>
 </body>
 </html>
