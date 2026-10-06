@@ -203,7 +203,7 @@ $('bizTag').textContent=BIZ_NAME+' · คลิปยาว';
 if(BIZ==='mu'){$('bizTag').style.color='#1f6f6b';$('bizTag').style.fontWeight='700';}
 function setEndBtns(on){[els.btnDone,els.btnStock,els.btnDefect,els.btnWrong,els.btnCancel].forEach(b=>b.disabled=!on);}
 let stream=null,rec=null,chunks=[],current=null,rafId=null,canvas=null,ctx=null,drawTimer=null;
-let seen=new Set(),queue=[],stats={done:0},remindTimer=null;
+let seen=new Set(),queue=[],stats={done:0},remindTimer=null,badClip=false;
 function toast(msg,kind){els.toast.textContent=msg;els.toast.className='toast show'+(kind?' '+kind:'');
   clearTimeout(toast._t);toast._t=setTimeout(()=>els.toast.className='toast',2800);}
 /* ---------- IndexedDB: เก็บคลิปในคิว "ถาวร" (ปิดแท็บ/รีเฟรช/ไฟดับ ก็ไม่หาย) ---------- */
@@ -291,6 +291,7 @@ function handleScan(code){const up=code.toUpperCase();
 function startClip(order){
   const packer=els.packer.value.trim()||'-';
   current={order,packer,startTs:Date.now(),rowEl:null};seen.add(order);
+  if(badClip){badClip=false;$('alertbar').classList.remove('on');document.body.style.paddingTop='';}
   els.stamp.style.display='flex';els.stampOrd.textContent=order;
   els.stampPacker.textContent='โดย '+packer;els.stampTime.textContent=nowStr();
   const cs=buildCanvasStream();chunks=[];
@@ -312,7 +313,7 @@ function finishClip(end){
       if(c.rowEl){c.rowEl.className='row dup';const b=c.rowEl.querySelector('.badge');b.style.display='';b.textContent='คลิปเสีย';}
       const bar=$('alertbar');
       bar.textContent='⛔ คลิป '+c.order+' เสีย (ไม่มีภาพ) — ห้ามย่อ/สลับหน้าต่างตอนอัด ต้องแพคใหม่และอัดใหม่';
-      bar.classList.add('on');document.body.style.paddingTop='48px';beep();
+      bar.classList.add('on');document.body.style.paddingTop='48px';beep();badClip=true;
       toast('⛔ คลิปเสีย ไม่มีภาพ — ต้องอัดใหม่','warn');
       updateCounts();return;
     }
@@ -447,7 +448,7 @@ function checkStuck(){
     bar.textContent='⚠ มี '+stuck.length+' คลิปค้างอัปโหลดเกิน '+STUCK_MIN+' นาที — เช็คเน็ต/เสียบสาย LAN และห้ามปิดหน้านี้ จนกว่า "รออัปโหลด" = 0';
     bar.classList.add('on');document.body.style.paddingTop='48px';
     if(now-_lastBeep>20000){_lastBeep=now;beep();}
-  }else{bar.classList.remove('on');document.body.style.paddingTop='';}
+  }else if(!badClip){bar.classList.remove('on');document.body.style.paddingTop='';}
 }
 /* v9: เตือนทันทีถ้าหน้าถูกซ่อนระหว่างอัด (ย่อหน้าต่าง/สลับแท็บ) = ภาพหยุดบันทึก */
 document.addEventListener('visibilitychange',()=>{
@@ -455,7 +456,7 @@ document.addEventListener('visibilitychange',()=>{
     const bar=$('alertbar');
     bar.textContent='⛔ หน้าถูกซ่อนขณะกำลังอัด '+current.order+' — ภาพจะไม่ถูกบันทึก! กลับมาที่หน้านี้ทันที';
     bar.classList.add('on');document.body.style.paddingTop='48px';beep();
-  }else if(!document.hidden&&!queue.length){
+  }else if(!document.hidden&&!queue.length&&!badClip){
     $('alertbar').classList.remove('on');document.body.style.paddingTop='';
   }
 });
