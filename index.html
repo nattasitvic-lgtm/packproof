@@ -161,7 +161,7 @@
   <select id="quality" title="ความละเอียด">
     <option value="1280x720">720p</option>
     <option value="854x480">480p (เบาเครื่อง)</option>
-    <option value="1920x1080">1080p</option>
+    <option value="1920x1080">1080p (เครื่องแรง/กล้องเดียว)</option>
   </select>
 </footer>
 <div class="cfg">
@@ -183,6 +183,10 @@ const END_CODES={
   'CANCEL':      {status:'CANCEL', reason:'ลูกค้าขอแก้/ยกเลิก',  label:'ยกเลิก'}
 };
 const REMIND_AFTER_MIN=35;
+/* v10: ลดภาระเครื่อง — อัด 15 ภาพ/วิ (พอสำหรับหลักฐาน), ใช้ตัวแปลงวิดีโอ VP8 (เบากว่า VP9 หลายเท่า), bitrate ตามความละเอียด */
+const REC_FPS=15;
+const MIN_OK_FPS=8;        // ต่ำกว่านี้ = ภาพกระตุก → เตือนบนจอ
+const BITRATE={'854x480':1200000,'1280x720':2500000,'1920x1080':4000000};
 const CHUNK=6*1024*1024;   // 6MB/chunk (ทวีคูณ 256KB ตามที่ Drive resumable ต้องการ + เลี่ยงลิมิต Apps Script 50MB/ครั้ง)
 const STUCK_MIN=2;         // เตือนแดง+เสียง เมื่อคลิปค้างคิวเกินกี่นาที
 const RETRY_MS=30000;      // ลองส่งคิวค้างซ้ำอัตโนมัติทุกกี่ ms (กันเน็ตกระตุก/หลุด)
@@ -204,6 +208,7 @@ if(BIZ==='mu'){$('bizTag').style.color='#1f6f6b';$('bizTag').style.fontWeight='7
 function setEndBtns(on){[els.btnDone,els.btnStock,els.btnDefect,els.btnWrong,els.btnCancel].forEach(b=>b.disabled=!on);}
 let stream=null,rec=null,chunks=[],current=null,rafId=null,canvas=null,ctx=null,drawTimer=null;
 let seen=new Set(),queue=[],stats={done:0},remindTimer=null,badClip=false;
+let perfTicks=[],perfLow=0;
 function toast(msg,kind){els.toast.textContent=msg;els.toast.className='toast show'+(kind?' '+kind:'');
   clearTimeout(toast._t);toast._t=setTimeout(()=>els.toast.className='toast',2800);}
 /* ---------- IndexedDB: เก็บคลิปในคิว "ถาวร" (ปิดแท็บ/รีเฟรช/ไฟดับ ก็ไม่หาย) ---------- */
@@ -251,6 +256,7 @@ function buildCanvasStream(){
   canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;ctx=canvas.getContext('2d');
   const v=els.cam;
   function paint(){
+    perfTicks.push(performance.now());
     if(v.videoWidth)ctx.drawImage(v,0,0,w,h);
     const g=ctx.createLinearGradient(0,h-150,0,h);
     g.addColorStop(0,'rgba(0,0,0,0)');g.addColorStop(1,'rgba(0,0,0,.55)');
@@ -265,12 +271,16 @@ function buildCanvasStream(){
       ctx.fillText('โดย '+(current.packer||'-'),w-Math.round(26*s),h-Math.round(40*s));
       ctx.textAlign='left';}
   }
-  (function loop(){paint();rafId=requestAnimationFrame(loop);})();
+  /* v10: วาดแค่ 15 ภาพ/วิ (เดิมวาดทุกเฟรมจอ ~60/วิ เปลืองเครื่องเปล่าๆ) */
+  let lastPaint=0;
+  (function loop(){const now=performance.now();
+    if(now-lastPaint>=1000/REC_FPS-4){lastPaint=now;paint();}
+    rafId=requestAnimationFrame(loop);})();
   /* v9: กันเคสแท็บ/หน้าต่างถูกซ่อน — requestAnimationFrame จะหยุดวาด ทำให้คลิปว่างเปล่า (0 ไบต์)
      ตัวจับเวลาสำรองนี้วาดต่อให้ ได้ภาพช้าแต่ยังมีหลักฐาน ไม่สูญทั้งคลิป */
   clearInterval(drawTimer);
   drawTimer=setInterval(()=>{if(document.hidden)paint();},200);
-  return canvas.captureStream(25);
+  return canvas.captureStream(REC_FPS);
 }
 function startTimerUI(){els.timer.style.display='block';const t0=current.startTs;
   current._tick=setInterval(()=>{const sec=Math.floor((Date.now()-t0)/1000);
@@ -295,8 +305,9 @@ function startClip(order){
   els.stamp.style.display='flex';els.stampOrd.textContent=order;
   els.stampPacker.textContent='โดย '+packer;els.stampTime.textContent=nowStr();
   const cs=buildCanvasStream();chunks=[];
-  const mime=MediaRecorder.isTypeSupported('video/webm;codecs=vp9')?'video/webm;codecs=vp9':'video/webm';
-  rec=new MediaRecorder(cs,{mimeType:mime,videoBitsPerSecond:2500000});
+  const mime=['video/webm;codecs=vp8','video/webm;codecs=vp9','video/webm'].find(m=>MediaRecorder.isTypeSupported(m));
+  rec=new MediaRecorder(cs,{mimeType:mime,videoBitsPerSecond:BITRATE[els.quality.value]||2500000});
+  perfTicks=[];perfLow=0;
   rec.ondataavailable=ev=>{if(ev.data.size)chunks.push(ev.data);};
   rec.start(120000);
   setRec('rec','กำลังอัด · '+order);startTimerUI();setEndBtns(true);
@@ -448,8 +459,23 @@ function checkStuck(){
     bar.textContent='⚠ มี '+stuck.length+' คลิปค้างอัปโหลดเกิน '+STUCK_MIN+' นาที — เช็คเน็ต/เสียบสาย LAN และห้ามปิดหน้านี้ จนกว่า "รออัปโหลด" = 0';
     bar.classList.add('on');document.body.style.paddingTop='48px';
     if(now-_lastBeep>20000){_lastBeep=now;beep();}
-  }else if(!badClip){bar.classList.remove('on');document.body.style.paddingTop='';}
+  }else if(!badClip&&!(current&&current._perfWarn)){bar.classList.remove('on');document.body.style.paddingTop='';}
 }
+/* v10: ตัวเฝ้าความลื่นของภาพ — ถ้าเครื่องวาดได้ต่ำกว่า MIN_OK_FPS ติดกัน 10 วิ เตือนให้ลดความละเอียด/ปิดโปรแกรม */
+setInterval(()=>{
+  if(!current||document.hidden)return;
+  if(Date.now()-current.startTs<12000)return;      // รอให้กล้องนิ่งก่อน
+  const now=performance.now();perfTicks=perfTicks.filter(t=>now-t<10000);
+  const fps=perfTicks.length/10;
+  perfLow=fps<MIN_OK_FPS?perfLow+1:0;
+  const bar=$('alertbar');
+  if(perfLow>=2&&!badClip){
+    bar.textContent='⚠ เครื่องทำงานหนัก อัดได้แค่ '+fps.toFixed(1)+' ภาพ/วินาที (ภาพจะกระตุก) — เปลี่ยนเป็น 720p และปิดโปรแกรมที่ไม่ใช้';
+    bar.classList.add('on');document.body.style.paddingTop='48px';current._perfWarn=true;
+  }else if(perfLow===0&&current._perfWarn){
+    current._perfWarn=false;bar.classList.remove('on');document.body.style.paddingTop='';
+  }
+},5000);
 /* v9: เตือนทันทีถ้าหน้าถูกซ่อนระหว่างอัด (ย่อหน้าต่าง/สลับแท็บ) = ภาพหยุดบันทึก */
 document.addEventListener('visibilitychange',()=>{
   if(document.hidden&&current){
@@ -466,7 +492,7 @@ window.addEventListener('beforeunload',e=>{if(queue.length){e.preventDefault();e
 document.addEventListener('click',e=>{if(!['INPUT','BUTTON','A','SELECT','OPTION'].includes(e.target.tagName))els.scan.focus();});
 navigator.mediaDevices&&navigator.mediaDevices.enumerateDevices&&listCams();
 resumeQueue();
-console.log('PackProof v9 — กันคลิปเสียตอนหน้าถูกซ่อน (วาดสำรอง+เตือน+ไม่ส่งไฟล์ว่าง) + multi-tenant, biz='+BIZ);
+console.log('PackProof v10 — เบาเครื่อง (VP8 + 15fps + เตือนภาพกระตุก) + กันคลิปเสีย + multi-tenant, biz='+BIZ);
 </script>
 </body>
 </html>
