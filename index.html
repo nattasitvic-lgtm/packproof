@@ -139,6 +139,13 @@
         <small>ห่างกล้อง <em>30–40 ซม. (ประมาณ 1 ศอก)</em> · ใกล้กว่านี้ภาพเบลอ ไกลกว่านี้อ่านเลขไม่ออก</small></div>
       </div>
     </div>
+    <div class="showdoc" id="showitem">
+      <div class="sdtxt">
+        <div class="cd" id="itemCd">8</div>
+        <div><b>🎸 ยกเครื่องให้กล้องเห็นรอบตัว + ซูมเลข Serial</b>
+        <small>ทำ<em>ก่อน</em>ลงเคส/ห่อ — เป็นหลักฐานว่าของออกจากร้านในสภาพดี</small></div>
+      </div>
+    </div>
   </section>
   <section class="console">
     <div class="scan-row">
@@ -264,7 +271,8 @@ try{bc=new BroadcastChannel('packproof_station');
 els.quality.onchange=()=>{qManual=true;if(stream&&!current){stopCam();startCam();}};
 let stream=null,rec=null,chunks=[],current=null,rafId=null,canvas=null,ctx=null,drawTimer=null;
 let seen=new Set(),queue=[],stats={done:0},remindTimer=null,badClip=false;
-let perfTicks=[],perfLow=0;
+let perfTicks=[],perfLow=0,clipPaints=0,itemTimer=null;
+const MIN_CLIP_SEC=BIZ==='mu'?60:20;   // v12: DONE เร็วกว่านี้ ต้องยืนยันก่อน
 function toast(msg,kind){els.toast.textContent=msg;els.toast.className='toast show'+(kind?' '+kind:'');
   clearTimeout(toast._t);toast._t=setTimeout(()=>els.toast.className='toast',2800);}
 /* ---------- IndexedDB: เก็บคลิปในคิว "ถาวร" (ปิดแท็บ/รีเฟรช/ไฟดับ ก็ไม่หาย) ---------- */
@@ -322,7 +330,7 @@ function buildCanvasStream(){
   canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;ctx=canvas.getContext('2d');
   const v=els.cam;
   function paint(){
-    perfTicks.push(performance.now());
+    perfTicks.push(performance.now());clipPaints++;
     if(v.videoWidth)ctx.drawImage(v,0,0,w,h);
     const g=ctx.createLinearGradient(0,h-150,0,h);
     g.addColorStop(0,'rgba(0,0,0,0)');g.addColorStop(1,'rgba(0,0,0,.55)');
@@ -359,8 +367,8 @@ els.scan.addEventListener('keydown',e=>{if(e.key!=='Enter')return;
     toast('⚠ แป้นพิมพ์เป็นภาษาไทย! กดปุ่ม ~ (ตัวหนอน มุมซ้ายบน) หรือ Alt+Shift สลับเป็น EN แล้วยิงใหม่','warn');return;}
   if(!stream){toast('เปิดกล้องก่อนนะครับ','warn');return;}handleScan(code);});
 function handleScan(code){const up=code.toUpperCase();
-  if(END_CODES[up]){if(current)finishClip(END_CODES[up]);else toast('ยังไม่มีออเดอร์ที่กำลังอัด');return;}
-  if(current&&code===current.order){finishClip(END_CODES['DONE']);return;}
+  if(END_CODES[up]){if(current)endClip(END_CODES[up]);else toast('ยังไม่มีออเดอร์ที่กำลังอัด');return;}
+  if(current&&code===current.order){endClip(END_CODES['DONE']);return;}
   if(current){toast('⚠ กำลังอัด '+current.order+' อยู่ — ปิดคลิปก่อนเริ่มใหม่','warn');return;}
   if(seen.has(code))toast('↻ เบอร์ '+code+' เคยยิงวันนี้ — เริ่มแพครอบใหม่','amber');
   startClip(code);}
@@ -373,16 +381,35 @@ function startClip(order){
   const cs=buildCanvasStream();chunks=[];
   const mime=['video/webm;codecs=vp8','video/webm;codecs=vp9','video/webm'].find(m=>MediaRecorder.isTypeSupported(m));
   rec=new MediaRecorder(cs,{mimeType:mime,videoBitsPerSecond:BITRATE[els.quality.value]||2500000});
-  perfTicks=[];perfLow=0;
+  perfTicks=[];perfLow=0;clipPaints=0;
   rec.ondataavailable=ev=>{if(ev.data.size)chunks.push(ev.data);};
   rec.start(120000);
   setRec('rec','กำลังอัด · '+order);startTimerUI();setEndBtns(true);
   current.rowEl=addRow({order,packer,running:true});updateCounts();runShowDoc();}
 function runShowDoc(){els.showdoc.classList.add('on');let n=4;els.showCd.textContent=n;
-  const iv=setInterval(()=>{n--;els.showCd.textContent=n;if(n<=0){clearInterval(iv);els.showdoc.classList.remove('on');}},1000);}
+  const iv=setInterval(()=>{n--;els.showCd.textContent=n;if(n<=0){clearInterval(iv);els.showdoc.classList.remove('on');
+    if(BIZ==='mu'&&current)runShowItem();}},1000);}
+/* v12: จังหวะที่ 2 — เตือนให้โชว์เครื่องเปล่า + Serial ก่อนห่อ (เฉพาะดนตรี) */
+function runShowItem(){const el=$('showitem');el.classList.add('on');let n=8;$('itemCd').textContent=n;
+  clearInterval(itemTimer);
+  itemTimer=setInterval(()=>{n--;$('itemCd').textContent=n;if(n<=0||!current){clearInterval(itemTimer);el.classList.remove('on');}},1000);}
+/* v12: ปิดคลิปผ่านด่านนี้ — DONE เร็วผิดปกติต้องยืนยัน (กันยิงพลาด/เริ่มอัดหลังห่อเสร็จ) */
+function endClip(end){
+  if(!current)return;
+  if(end.status==='DONE'){const sec=Math.round((Date.now()-current.startTs)/1000);
+    if(sec<MIN_CLIP_SEC&&!confirm('⚠ คลิปนี้ยาวแค่ '+sec+' วินาที (ปกติต้องเกิน '+MIN_CLIP_SEC+' วินาที)\n\n'+
+      (BIZ==='mu'?'ของชิ้นใหญ่ต้องเห็นตั้งแต่เครื่องเปล่า → ลงเคส → ปิดกล่อง\n\n':'')+
+      'กด OK = ปิดคลิปนี้จริง\nกด Cancel = อัดต่อ')){toast('อัดต่อ — ยังไม่ปิดคลิป');els.scan.focus();return;}}
+  finishClip(end);}
 function finishClip(end){
   if(!current)return;const c=current;current=null;stopTimerUI();
+  if(typeof end!=='object'||!end)end={status:'HOLD',reason:'ปิดกล้องระหว่างอัด',label:'ปิดกล้อง'};
+  end=Object.assign({},end);
+  els.showdoc.classList.remove('on');$('showitem').classList.remove('on');clearInterval(itemTimer);
   const dur=Math.floor((Date.now()-c.startTs)/1000);
+  /* v12: ติดป้ายคลิปที่ภาพกระตุก (วาดได้ต่ำกว่าเกณฑ์) ให้เห็นในชีต/รายงาน */
+  const avgFps=dur>0?clipPaints/dur:0;
+  if(dur>=20&&avgFps<MIN_OK_FPS){end.reason=(end.reason?end.reason+' · ':'')+'ภาพกระตุก '+avgFps.toFixed(1)+' ภาพ/วิ';}
   const finalize=()=>{cancelAnimationFrame(rafId);clearInterval(drawTimer);drawTimer=null;
     const blob=new Blob(chunks,{type:'video/webm'});
     /* v9: ยามกันคลิปเสีย — ถ้าไฟล์ว่าง (0 ไบต์) แปลว่าภาพไม่ถูกบันทึกเลย ห้ามส่งขึ้น Drive ให้เข้าใจผิดว่ามีหลักฐาน */
@@ -407,11 +434,11 @@ function finishClip(end){
   els.stamp.style.display='none';setEndBtns(false);
   if(pendingQ){pendingQ=false;setTimeout(()=>{if(stream&&!current&&!qManual){toast('มีอีกกล้องเปิดบนเครื่องนี้ — ปรับเป็น 720p ให้อัตโนมัติ','amber');stopCam();startCam();}},2000);}
   setRec('idle','พร้อม — ยิงใบออเดอร์ถัดไป');toast('ปิดคลิป '+c.order+' ('+end.label+', '+hms(dur)+')',end.status==='DONE'?'':'amber');}
-els.btnDone.onclick=()=>finishClip(END_CODES['DONE']);
-els.btnStock.onclick=()=>finishClip(END_CODES['HOLD-STOCK']);
-els.btnDefect.onclick=()=>finishClip(END_CODES['HOLD-DEFECT']);
-els.btnWrong.onclick=()=>finishClip(END_CODES['HOLD-WRONG']);
-els.btnCancel.onclick=()=>finishClip(END_CODES['CANCEL']);
+els.btnDone.onclick=()=>endClip(END_CODES['DONE']);
+els.btnStock.onclick=()=>endClip(END_CODES['HOLD-STOCK']);
+els.btnDefect.onclick=()=>endClip(END_CODES['HOLD-DEFECT']);
+els.btnWrong.onclick=()=>endClip(END_CODES['HOLD-WRONG']);
+els.btnCancel.onclick=()=>endClip(END_CODES['CANCEL']);
 function addRow({order,packer,dup,running}){
   if(els.log.querySelector('.empty'))els.log.innerHTML='';
   const div=document.createElement('div');
@@ -561,7 +588,7 @@ window.addEventListener('beforeunload',e=>{if(queue.length){e.preventDefault();e
 document.addEventListener('click',e=>{if(!['INPUT','BUTTON','A','SELECT','OPTION'].includes(e.target.tagName))els.scan.focus();});
 navigator.mediaDevices&&navigator.mediaDevices.enumerateDevices&&listCams();
 resumeQueue();
-console.log('PackProof v11 — คำแนะนำบนจอ + กรอบวางใบ + ความละเอียดอัตโนมัติ + VP8/15fps, biz='+BIZ);
+console.log('PackProof v12 — กันคลิปสั้น + จังหวะโชว์เครื่อง/Serial + ป้ายภาพกระตุก + คำแนะนำบนจอ + ความละเอียดอัตโนมัติ, biz='+BIZ);
 </script>
 </body>
 </html>
