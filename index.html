@@ -186,7 +186,7 @@
   </select>
 </footer>
 <div class="cfg">
-  ระบบ: <a id="cfgUrl" href="#">กำลังโหลด…</a> · ความละเอียด: <b id="qInfo">—</b> · วิดีโอเก็บเข้า Google Drive อัตโนมัติ (ไม่ต้องเชื่อม Google)
+  ระบบ: <a id="cfgUrl" href="#">กำลังโหลด…</a> · ความละเอียด: <b id="qInfo">—</b> · เวลา: <b id="clkInfo">กำลังเช็ค…</b> · วิดีโอเก็บเข้า Google Drive อัตโนมัติ (ไม่ต้องเชื่อม Google)
 </div>
 <div class="toast" id="toast"></div>
 <script>
@@ -297,8 +297,23 @@ function beep(){try{if(!_ac)_ac=new (window.AudioContext||window.webkitAudioCont
   const o=_ac.createOscillator(),g=_ac.createGain();o.connect(g);g.connect(_ac.destination);
   o.type='square';o.frequency.value=880;g.gain.value=0.12;
   o.start();o.stop(_ac.currentTime+0.28);}catch(_){}}
-function nowStr(){const d=new Date(),p=n=>String(n).padStart(2,'0');
-  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;}
+/* v13: เวลาจริงจากอินเทอร์เน็ต (ไม่สนนาฬิกา/โซนเวลาของคอม) — offset จาก HTTP Date ของ server, แสดงเป็นเวลาไทยเสมอ */
+let clockOff=0,clockSynced=false;
+function nowMs(){return Date.now()+clockOff;}
+function bkk(ms){const d=new Date(ms+7*3600e3),p=n=>String(n).padStart(2,'0');
+  return {date:`${d.getUTCFullYear()}-${p(d.getUTCMonth()+1)}-${p(d.getUTCDate())}`,hm:`${p(d.getUTCHours())}.${p(d.getUTCMinutes())}`,
+    hms:`${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`,short:`${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`};}
+async function syncClock(){
+  for(const u of [location.pathname+'?clk='+Date.now()]){
+    try{const t0=Date.now();const r=await fetch(u,{method:'HEAD',cache:'no-store'});const t1=Date.now();
+      const h=r.headers.get('date');if(!h)continue;const srv=Date.parse(h);if(isNaN(srv))continue;
+      clockOff=Math.round(srv+500-(t0+t1)/2);clockSynced=true;
+      const min=Math.round(Math.abs(clockOff)/60000);
+      const el=$('clkInfo');if(el)el.textContent=min>=2?('⚠ นาฬิกาคอมเพี้ยน '+min+' นาที — ใช้เวลาจริงแทนแล้ว'):'ตรง ✓';
+      if(min>=2&&!syncClock._warned){syncClock._warned=1;toast('นาฬิกาคอมเครื่องนี้เพี้ยน '+min+' นาที — ระบบใช้เวลาจริงจากอินเทอร์เน็ตแทนให้แล้ว','amber');}
+      return true;}catch(_){}}
+  const el=$('clkInfo');if(el&&!clockSynced)el.textContent='ยังเช็คเวลาไม่ได้ (เน็ต?)';return false;}
+function nowStr(){const b=bkk(nowMs());return b.date+' '+b.hms;}
 function hms(sec){const p=n=>String(n).padStart(2,'0');return `${p(Math.floor(sec/60))}:${p(sec%60)}`;}
 async function listCams(){try{const devs=await navigator.mediaDevices.enumerateDevices();
   const cams=devs.filter(d=>d.kind==='videoinput');
@@ -374,7 +389,7 @@ function handleScan(code){const up=code.toUpperCase();
   startClip(code);}
 function startClip(order){
   const packer=els.packer.value.trim()||'-';
-  current={order,packer,startTs:Date.now(),rowEl:null};seen.add(order);
+  current={order,packer,startTs:Date.now(),startReal:nowMs(),rowEl:null};seen.add(order);
   if(badClip){badClip=false;$('alertbar').classList.remove('on');document.body.style.paddingTop='';}
   els.stamp.style.display='flex';els.stampOrd.textContent=order;
   els.stampPacker.textContent='โดย '+packer;els.stampTime.textContent=nowStr();
@@ -423,9 +438,8 @@ function finishClip(end){
     }
     if(c.rowEl){c.rowEl.className='row up';const b=c.rowEl.querySelector('.badge');b.style.display='';b.textContent='อัปโหลด…';}
     /* ชื่อไฟล์ = เลขใบสั่งซื้อ_เวลาเริ่มแพค (HH.mm) + สถานะต่อท้ายเฉพาะที่ไม่ใช่ DONE ; date = วันที่เริ่มแพค (ใช้เลือกโฟลเดอร์รายวันฝั่ง backend) */
-    const sd=new Date(c.startTs),p2=n=>String(n).padStart(2,'0');
-    const packDate=`${sd.getFullYear()}-${p2(sd.getMonth()+1)}-${p2(sd.getDate())}`;
-    const startHM=`${p2(sd.getHours())}.${p2(sd.getMinutes())}`;
+    const sb=bkk(c.startReal||(c.startTs+clockOff));
+    const packDate=sb.date,startHM=sb.hm;
     enqueueUpload({order:c.order,packer:c.packer,durationSec:dur,ts:nowStr(),status:end.status,reason:end.reason,
       date:packDate,
       filename:`${c.order}_${startHM}${end.status==='DONE'?'':'_'+end.status}.webm`,blob,rowEl:c.rowEl});
@@ -443,7 +457,7 @@ function addRow({order,packer,dup,running}){
   if(els.log.querySelector('.empty'))els.log.innerHTML='';
   const div=document.createElement('div');
   div.className='row '+(dup?'dup':running?'run':'ok');
-  const t=new Date().toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'});
+  const t=bkk(nowMs()).short;
   div.innerHTML=`<span class="ico"></span><span class="o">${order}</span>
     <span class="badge" style="${dup||running?'':'display:none'}">${dup?'ซ้ำ':'อัดอยู่'}</span>
     <span class="meta2">${packer?packer+' · ':''}${t}</span>`;
@@ -526,6 +540,7 @@ function blobChunkB64(blob,start,end){
     r.readAsDataURL(blob.slice(start,end));});
 }
 els.btnSync.onclick=()=>{if(!queue.length){toast('ไม่มีคิวค้าง');return;}toast('กำลังส่งคิว…');flushQueue();};
+syncClock();setInterval(()=>{if(!current)syncClock();},10*60*1000);
 function refreshCfg(){const u=localStorage.getItem(CFG_URL);
   els.cfgUrl.textContent=u?'พร้อมใช้งาน ✓':'ยังไม่ตั้งค่า';}
 els.cfgUrl.onclick=e=>{e.preventDefault();
@@ -588,7 +603,7 @@ window.addEventListener('beforeunload',e=>{if(queue.length){e.preventDefault();e
 document.addEventListener('click',e=>{if(!['INPUT','BUTTON','A','SELECT','OPTION'].includes(e.target.tagName))els.scan.focus();});
 navigator.mediaDevices&&navigator.mediaDevices.enumerateDevices&&listCams();
 resumeQueue();
-console.log('PackProof v12 — กันคลิปสั้น + จังหวะโชว์เครื่อง/Serial + ป้ายภาพกระตุก + คำแนะนำบนจอ + ความละเอียดอัตโนมัติ, biz='+BIZ);
+console.log('PackProof v13 — เวลาจริงจากเน็ต + กันคลิปสั้น + จังหวะโชว์เครื่อง/Serial + ป้ายภาพกระตุก + คำแนะนำบนจอ + ความละเอียดอัตโนมัติ, biz='+BIZ);
 </script>
 </body>
 </html>
