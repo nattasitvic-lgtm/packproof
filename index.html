@@ -119,7 +119,7 @@
 <div class="alertbar" id="alertbar"></div>
 <header>
   <div class="brand"><b>PackProof</b><small id="bizTag">Healthcare · คลิปยาว</small></div>
-  <div class="who">ผู้แพค <input id="packer" placeholder="ชื่อ/รหัส" autocomplete="off"></div>
+  <div class="who">ผู้แพค <input id="packer" placeholder="ชื่อ/รหัส" autocomplete="off" list="packerList"><datalist id="packerList"></datalist></div>
 </header>
 <main>
   <section class="stage">
@@ -205,7 +205,8 @@ const END_CODES={
 };
 const REMIND_AFTER_MIN=35;
 /* v10: ลดภาระเครื่อง — อัด 15 ภาพ/วิ (พอสำหรับหลักฐาน), ใช้ตัวแปลงวิดีโอ VP8 (เบากว่า VP9 หลายเท่า), bitrate ตามความละเอียด */
-const REC_FPS=15;
+/* v14: เครื่องที่เคยกระตุกแม้ที่ 720p → อัด 10 ภาพ/วิ (ลื่นกว่า 15 ที่ทำไม่ทัน) จำไว้ 7 วัน */
+let REC_FPS=15;
 const MIN_OK_FPS=8;        // ต่ำกว่านี้ = ภาพกระตุก → เตือนบนจอ
 const BITRATE={'854x480':1200000,'1280x720':2500000,'1920x1080':4000000};
 const CHUNK=6*1024*1024;   // 6MB/chunk (ทวีคูณ 256KB ตามที่ Drive resumable ต้องการ + เลี่ยงลิมิต Apps Script 50MB/ครั้ง)
@@ -323,6 +324,7 @@ async function listCams(){try{const devs=await navigator.mediaDevices.enumerateD
 els.btnCam.onclick=async()=>{if(stream){stopCam();return;}await startCam();};
 async function startCam(){try{
   let reason='เลือกเอง';
+  REC_FPS=Date.now()<+(localStorage.getItem('pp_perf_vlow_until')||0)?10:15;
   if(!qManual){const [q,r]=autoQuality();els.quality.value=q;reason='อัตโนมัติ: '+r;}
   const [w,h]=els.quality.value.split('x').map(Number);const devId=els.camSel.value;
   stream=await navigator.mediaDevices.getUserMedia({video:{width:w,height:h,deviceId:devId?{exact:devId}:undefined},audio:false});
@@ -331,7 +333,7 @@ async function startCam(){try{
   if(s.height&&s.height<h-8){els.quality.value=s.height>=1070?'1920x1080':s.height>=710?'1280x720':'854x480';
     reason+=' · กล้องรองรับสูงสุด '+s.height+'p';}
   const qLabel=els.quality.value.split('x')[1]+'p';
-  $('qInfo').textContent=qLabel+' ('+reason+')';
+  $('qInfo').textContent=qLabel+(REC_FPS<15?' · '+REC_FPS+' ภาพ/วิ':'')+' ('+reason+')';
   els.cam.srcObject=stream;els.btnCam.textContent='ปิดกล้อง';els.idleHint.style.display='none';
   setRec('idle','พร้อม');await listCams();els.scan.focus();toast('เปิดกล้องแล้ว · '+qLabel+' ('+reason+') — ยิงใบปะหน้าเพื่อเริ่ม');
 }catch(e){toast('เปิดกล้องไม่ได้: '+e.message,'warn');}}
@@ -388,7 +390,7 @@ function handleScan(code){const up=code.toUpperCase();
   if(seen.has(code))toast('↻ เบอร์ '+code+' เคยยิงวันนี้ — เริ่มแพครอบใหม่','amber');
   startClip(code);}
 function startClip(order){
-  const packer=els.packer.value.trim()||'-';
+  const packer=cleanName(els.packer.value)||'-';els.packer.value=packer==='-'?'':packer;rememberName(packer);
   current={order,packer,startTs:Date.now(),startReal:nowMs(),rowEl:null};seen.add(order);
   if(badClip){badClip=false;$('alertbar').classList.remove('on');document.body.style.paddingTop='';}
   els.stamp.style.display='flex';els.stampOrd.textContent=order;
@@ -540,6 +542,19 @@ function blobChunkB64(blob,start,end){
     r.readAsDataURL(blob.slice(start,end));});
 }
 els.btnSync.onclick=()=>{if(!queue.length){toast('ไม่มีคิวค้าง');return;}toast('กำลังส่งคิว…');flushQueue();};
+/* v14: ชื่อคนแพคให้ตรงกันทุกวัน — ตัดสระ/วรรณยุกต์ไทยที่ติดมาจากแป้นผิดภาษา, รวมชื่อซ้ำ (pai=ปาย), จำชื่อล่าสุด + รายชื่อให้เลือก */
+const NAME_ALIAS={pai:'ปาย','ครีม':'cream','เมย':'เมย์',may:'เมย์'};
+const NAME_SEED={mu:['cream','ปาย','เมย์'],hc:['yawpan','bha','อาร์ม/ทัน/ฟ่า']};
+function cleanName(v){let s=String(v||'').normalize('NFC').replace(/^[\u0E31\u0E34-\u0E3A\u0E47-\u0E4E\s]+/,'')
+  .replace(/([A-Za-z0-9])[\u0E31\u0E34-\u0E3A\u0E47-\u0E4E]+/g,'$1').replace(/\s+/g,' ').trim();
+  const k=s.toLowerCase();return NAME_ALIAS[k]||NAME_ALIAS[s]||(/^[A-Za-z0-9 ]+$/.test(s)?k:s);}
+function knownNames(){let a=[];try{a=JSON.parse(localStorage.getItem('pp_names_'+BIZ)||'[]');}catch(_){}
+  return [...new Set([...(NAME_SEED[BIZ]||[]),...a])];}
+function renderNames(){const dl=$('packerList');if(dl)dl.innerHTML=knownNames().map(n=>`<option value="${n}">`).join('');}
+function rememberName(n){if(!n||n==='-')return;try{localStorage.setItem('pp_packer_'+BIZ,n);
+  const a=knownNames();if(!a.includes(n)){a.push(n);localStorage.setItem('pp_names_'+BIZ,JSON.stringify(a.slice(-20)));}}catch(_){}renderNames();}
+renderNames();try{const last=localStorage.getItem('pp_packer_'+BIZ);if(last&&!els.packer.value)els.packer.value=last;}catch(_){}
+els.packer.addEventListener('change',()=>{const n=cleanName(els.packer.value);els.packer.value=n;rememberName(n);});
 syncClock();setInterval(()=>{if(!current)syncClock();},10*60*1000);
 function refreshCfg(){const u=localStorage.getItem(CFG_URL);
   els.cfgUrl.textContent=u?'พร้อมใช้งาน ✓':'ยังไม่ตั้งค่า';}
@@ -583,6 +598,7 @@ setInterval(()=>{
     bar.classList.add('on');document.body.style.paddingTop='48px';current._perfWarn=true;
     /* จำไว้ 7 วัน: เครื่องนี้ไม่ไหวที่ 1080p → ครั้งหน้าเลือก 720p อัตโนมัติ */
     if(els.quality.value==='1920x1080'){try{localStorage.setItem('pp_perf_low_until',String(Date.now()+7*864e5));}catch(_){}}
+    else if(REC_FPS>10){try{localStorage.setItem('pp_perf_vlow_until',String(Date.now()+7*864e5));}catch(_){}}   // v14: 720p ยังไม่ไหว → คลิปถัดไป 10 ภาพ/วิ
   }else if(perfLow===0&&current._perfWarn){
     current._perfWarn=false;bar.classList.remove('on');document.body.style.paddingTop='';
   }
@@ -603,7 +619,7 @@ window.addEventListener('beforeunload',e=>{if(queue.length){e.preventDefault();e
 document.addEventListener('click',e=>{if(!['INPUT','BUTTON','A','SELECT','OPTION'].includes(e.target.tagName))els.scan.focus();});
 navigator.mediaDevices&&navigator.mediaDevices.enumerateDevices&&listCams();
 resumeQueue();
-console.log('PackProof v13 — เวลาจริงจากเน็ต + กันคลิปสั้น + จังหวะโชว์เครื่อง/Serial + ป้ายภาพกระตุก + คำแนะนำบนจอ + ความละเอียดอัตโนมัติ, biz='+BIZ);
+console.log('PackProof v14 — ชื่อคนแพคมาตรฐาน + fps ปรับตามเครื่อง + เวลาจริงจากเน็ต + กันคลิปสั้น + จังหวะโชว์เครื่อง/Serial + ป้ายภาพกระตุก + คำแนะนำบนจอ + ความละเอียดอัตโนมัติ, biz='+BIZ);
 </script>
 </body>
 </html>
